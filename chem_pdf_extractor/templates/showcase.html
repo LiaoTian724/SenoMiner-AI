@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>单篇论文演示 · Senolytics Knowledge</title>
+  <style>
+    :root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#203044;background:#f3f6fa;font-size:15px}
+    *{box-sizing:border-box}body{margin:0}button,input,select{font:inherit}a{color:#187279;text-decoration:none}a:hover{text-decoration:underline}
+    .top{background:#18283c;color:#fff;box-shadow:0 6px 24px #18283c18}.top-inner{max-width:1280px;margin:auto;padding:18px 28px;display:flex;justify-content:space-between;align-items:center;gap:20px}
+    .brand{display:flex;align-items:center;gap:13px;font-weight:750;letter-spacing:.02em;font-size:18px}.brand-mark{width:34px;height:34px;border-radius:11px;background:#36b4ad;color:#12303c;display:grid;place-items:center;font-size:21px}
+    .top nav{display:flex;gap:16px;align-items:center}.top a{color:#d8eaef;font-size:14px}.tag{font-size:12px;background:#294258;padding:6px 10px;border-radius:99px;color:#cff5ec}
+    main{max-width:1280px;margin:auto;padding:32px 28px 70px}.eyebrow{color:#17847e;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}
+    .hero{display:grid;grid-template-columns:1.7fr 1fr;gap:24px;align-items:stretch;margin-bottom:24px}.hero-main{background:#fff;border:1px solid #e4eaf0;border-radius:20px;padding:30px 34px;box-shadow:0 8px 28px #1b34500a}
+    h1{font-size:33px;line-height:1.2;color:#192d40;margin:11px 0 12px;letter-spacing:-.03em}h2{color:#192d40;font-size:18px;margin:0 0 13px}h3{color:#192d40;font-size:15px;margin:0 0 10px}.lead{line-height:1.7;color:#546579;margin:0 0 20px}
+    .hero-aside{border-radius:20px;padding:27px;background:#1f394f;color:#e6f5f5;position:relative;overflow:hidden}.hero-aside:after{content:"";position:absolute;width:220px;height:220px;border:1px solid #6ed6cb66;border-radius:50%;right:-110px;top:-100px;box-shadow:0 0 0 45px #4c9f9a10,0 0 0 95px #4c9f9a08}
+    .hero-aside .eyebrow{color:#74d9cd}.hero-aside h2{color:#fff;font-size:18px;line-height:1.55;margin:14px 0}.meta{font-size:13px;color:#bed1d9;line-height:1.8;position:relative;z-index:1}.meta a{color:#8ce8d6}.small{font-size:12px;color:#68798a;line-height:1.6}.hero-aside .small{color:#bbd1d7}
+    .actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.btn{border:1px solid #cfdbe5;border-radius:10px;padding:10px 15px;background:#fff;color:#213c4b;font-weight:650;cursor:pointer}.btn.primary{background:#198a83;color:#fff;border-color:#198a83}.btn:hover{filter:brightness(.96);text-decoration:none}.btn:disabled{opacity:.5;cursor:not-allowed}
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:20px 0 24px}.metric,.panel{background:#fff;border:1px solid #e4eaf0;border-radius:16px;box-shadow:0 4px 20px #19344c08}.metric{padding:20px}.metric b{display:block;font-size:28px;color:#192d40;margin-top:7px}.metric span{color:#617185;font-size:13px}.metric em{font-size:11px;color:#7d8996;font-style:normal;display:block;margin-top:4px}
+    .panel{padding:24px;margin-bottom:22px}.section-head{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:15px}.section-head p{margin:0;color:#708093;font-size:13px}.steps{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.step{border:1px solid #e4ebf0;background:#f8fafc;border-radius:12px;padding:14px;min-height:115px}.step .num{font-size:11px;color:#168b83;font-weight:800;display:block;margin-bottom:8px}.step strong{display:block;color:#1d3548;margin-bottom:5px}.step span:last-child{color:#718195;font-size:12px;line-height:1.5}.step.done{background:#eaf8f3;border-color:#a9ded1}.step.active{background:#eaf5fb;border-color:#95c7dc}
+    .status-line{display:flex;gap:12px;align-items:flex-start;margin-top:15px;padding:12px 14px;border-radius:10px;background:#f1f7f9;color:#356371;font-size:13px;line-height:1.5}.dot{height:9px;width:9px;flex:none;border-radius:50%;background:#26a69a;margin-top:4px}.status-line.error{background:#fff0ed;color:#aa453f}.status-line.error .dot{background:#d96352}
+    .strip{display:flex;flex-wrap:wrap;gap:8px}.pill{border-radius:99px;background:#eff7f6;border:1px solid #cfe7e3;padding:6px 10px;color:#326560;font-size:12px}.pill .count{font-weight:800;margin-left:4px}.pill.muted{color:#667587;background:#f4f6f8;border-color:#e2e8ed}
+    .table-toolbar{display:flex;gap:12px;justify-content:space-between;align-items:center;flex-wrap:wrap;margin:18px 0}.table-toolbar input,.table-toolbar select{border:1px solid #d7e1e9;border-radius:9px;padding:10px 12px;max-width:100%;outline:none;background:#fff;color:#21384a}.table-toolbar input{width:280px}.table-toolbar input:focus,.table-toolbar select:focus{border-color:#198a83;box-shadow:0 0 0 3px #198a8320}
+    .table-wrap{overflow:auto;border:1px solid #e5ebef;border-radius:12px}table{width:100%;border-collapse:collapse;min-width:950px}th{text-align:left;background:#f4f7f9;color:#53687b;font-size:12px;padding:12px 14px;white-space:nowrap}td{border-top:1px solid #edf1f4;padding:13px 14px;vertical-align:top;font-size:13px;line-height:1.5}tr:hover td{background:#f8fbfb}td:first-child{font-weight:700;color:#173d49;min-width:160px}td:last-child{white-space:nowrap}td .clamp{max-width:290px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+    .badge{display:inline-block;font-size:11px;font-weight:700;padding:4px 8px;border-radius:99px;background:#fff2dd;color:#9a6918}.badge.ok{background:#e7f6ef;color:#25765a}.badge.context{background:#eef0f4;color:#657184}.detail-btn{padding:6px 10px;border:1px solid #bedad7;background:#fff;color:#08776e;border-radius:8px;cursor:pointer}
+    .note{border-left:3px solid #e7ad5a;padding:10px 14px;background:#fffaf2;border-radius:0 8px 8px 0;font-size:13px;line-height:1.65;color:#685744;margin-top:18px}.empty{padding:44px 16px;text-align:center;color:#748395}.downloads{display:flex;gap:9px;flex-wrap:wrap}
+    dialog{border:0;border-radius:18px;padding:0;max-width:min(880px,94vw);width:100%;box-shadow:0 20px 70px #14293b55}dialog::backdrop{background:#122436a6}.dialog-head{padding:20px 24px;border-bottom:1px solid #e5ecf1;display:flex;justify-content:space-between;gap:16px}.dialog-head h2{margin:0}.close{border:0;background:#eef3f5;width:32px;height:32px;border-radius:8px;cursor:pointer}.dialog-body{padding:22px 24px;max-height:72vh;overflow:auto}.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.detail-item{background:#f7f9fb;border-radius:9px;padding:12px}.detail-item dt{font-size:11px;color:#6e7f8e;margin-bottom:5px}.detail-item dd{margin:0;color:#273e50;overflow-wrap:anywhere;line-height:1.55}.quote{border-left:3px solid #3aa69b;padding:9px 12px;background:#f1faf7;margin:8px 0;font-size:13px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}.dialog-links{display:flex;gap:12px;flex-wrap:wrap;margin-top:14px}.copyright{margin-top:24px;text-align:center;color:#8995a1;font-size:12px}
+    @media(max-width:900px){.hero{grid-template-columns:1fr}.steps{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:repeat(2,1fr)}}
+    @media(max-width:560px){.top-inner{padding:15px}.top .tag{display:none}main{padding:18px 14px 40px}.hero-main,.hero-aside,.panel{padding:20px}h1{font-size:27px}.grid{gap:8px}.metric{padding:15px}.metric b{font-size:23px}.steps{grid-template-columns:1fr}.detail-grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <header class="top"><div class="top-inner">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">✣</span><span>Senolytics Knowledge</span><span class="tag">单篇论文演示</span></div>
+    <nav><a href="/">PDF 工作台</a><a href="https://pubmed.ncbi.nlm.nih.gov/31542391/" target="_blank" rel="noopener noreferrer">论文来源 ↗</a></nav>
+  </div></header>
+  <main>
+    <div class="hero">
+      <section class="hero-main">
+        <span class="eyebrow">From paper to evidence</span>
+        <h1>一篇 PDF 的完整提取流程</h1>
+        <p class="lead">本页只处理根目录 <code>input_pdfs/</code> 中的这一篇论文。抽取结果按实验逐条展示，并保留原文引文、核验状态和外部数据库标识。</p>
+        <div class="actions"><button class="btn primary" id="runBtn" type="button">运行这篇论文</button><button class="btn" id="pdfBtn" type="button">下载原论文 PDF</button><span class="small" id="runHint">运行时，解析后的论文文字会发给本机配置的云端模型。</span></div>
+      </section>
+      <aside class="hero-aside"><span class="eyebrow">Selected article · 2019</span><h2 id="paperTitle">读取论文信息…</h2><div class="meta">PMID <a href="https://pubmed.ncbi.nlm.nih.gov/31542391/" target="_blank" rel="noopener noreferrer">31542391 ↗</a><br>PMCID PMC6796530<br>DOI 10.1016/j.ebiom.2019.08.069</div><p class="small" style="margin-top:17px">开放获取的原始研究。展示的是论文报告的结果，不是临床治疗建议。</p></aside>
+    </div>
+
+    <section class="panel" aria-labelledby="flowTitle"><div class="section-head"><div><span class="eyebrow">Pipeline</span><h2 id="flowTitle">这篇论文怎样变成可核查的记录</h2></div><p>每一步都对应项目中的实际处理模块</p></div>
+      <div class="steps">
+        <div class="step" id="step1"><span class="num">01 / INPUT</span><strong>读取 PDF</strong><span>确认唯一的输入论文</span></div>
+        <div class="step" id="step2"><span class="num">02 / PARSE</span><strong>解析全文</strong><span>保留供复核的文本</span></div>
+        <div class="step" id="step3"><span class="num">03 / EXTRACT</span><strong>抽取实验</strong><span>模型按原文分段提取</span></div>
+        <div class="step" id="step4"><span class="num">04 / ENRICH</span><strong>查询数据库</strong><span>PubChem · ChEMBL · PubMed</span></div>
+        <div class="step" id="step5"><span class="num">05 / REVIEW</span><strong>证据核验与导出</strong><span>人工复核后才能用于结论</span></div>
+      </div><div class="status-line" id="statusLine"><span class="dot"></span><span id="statusText">正在读取项目状态…</span></div>
+    </section>
+
+    <section class="grid" aria-label="结果概览">
+      <div class="metric"><span>输出候选记录</span><b id="metricRecords">—</b><em>含作者实验、引用研究和背景</em></div>
+      <div class="metric"><span>受测化合物名称写法</span><b id="metricCompounds">—</b><em>别名与组合可能重复，需核验</em></div>
+      <div class="metric"><span>待人工核验</span><b id="metricReview">—</b><em>字面匹配无法证明实验关系</em></div>
+      <div class="metric"><span>解析到 PubChem CID</span><b id="metricCids">—</b><em>身份信息与实验结果分开</em></div>
+    </section>
+
+    <section class="panel" aria-labelledby="resultsTitle">
+      <div class="section-head"><div><span class="eyebrow">Evidence repository</span><h2 id="resultsTitle">论文中的化合物与实验</h2></div><div class="downloads"><button class="btn" id="excelBtn" type="button" disabled>下载 Excel</button><button class="btn" id="jsonBtn" type="button" disabled>下载完整 JSON</button><button class="btn" id="sourceBtn" type="button" disabled>下载核验文本</button></div></div>
+      <p class="small">点击任一实验，查看原文引文、实验步骤和数据库链接。</p>
+      <div class="strip" id="compoundStrip" style="margin-top:17px"><span class="pill muted">等待运行</span></div>
+      <div class="table-toolbar"><span class="small" id="rowCount">尚无结果</span><select id="originFilter" aria-label="筛选实验来源"><option value="original_experiment">模型标为作者实验（待核）</option><option value="all">全部来源</option><option value="cited_experiment">模型标为引用研究</option><option value="background">背景信息</option></select><input id="searchBox" type="search" placeholder="搜索化合物、实验模型或结果" aria-label="搜索实验记录"></div>
+      <div class="table-wrap"><table><thead><tr><th>化合物 / 干预</th><th>模型</th><th>剂量与时间</th><th>检测与论文结果</th><th>证据</th><th>详情</th></tr></thead><tbody id="recordRows"><tr><td class="empty" colspan="6">运行完成后在这里逐条查看实验记录</td></tr></tbody></table></div>
+      <div class="note">来源分类也是模型输出。抽样检查发现部分旧小鼠实验和 IPF 研究被误标为本论文作者实验，筛选结果不能直接用于统计。“待核验”表示字段的原文支持或实验对应关系需要人检查；组合用药不能直接解释为每个单药都有效。</div>
+    </section>
+
+    <section class="panel"><div class="section-head"><div><span class="eyebrow">How to present</span><h2>向老师汇报时，按这四句讲</h2></div></div><div class="detail-grid">
+      <div class="detail-item"><dt>研究输入</dt><dd>一篇公开论文 PDF，和它对应的原文文本。</dd></div>
+      <div class="detail-item"><dt>核心处理</dt><dd>分段提取化合物、模型、剂量、步骤、终点和结果，并保留逐字引文。</dd></div>
+      <div class="detail-item"><dt>知识补充</dt><dd>对有原文支持的化合物名称查询 PubChem、ChEMBL、PubMed，保留未解析和歧义状态。</dd></div>
+      <div class="detail-item"><dt>结果边界</dt><dd>系统负责整理与定位证据；同一实验的关系、研究质量和疗效判断由研究者复核。</dd></div>
+    </div></section>
+    <div class="copyright">本地演示页面 · 数据来自当前项目的单篇论文输出 · <a href="/">进入完整工作台</a></div>
+  </main>
+
+  <dialog id="detailDialog"><div class="dialog-head"><div><span class="eyebrow">Experiment record</span><h2 id="detailTitle">实验详情</h2></div><button class="close" id="closeDialog" aria-label="关闭" type="button">×</button></div><div class="dialog-body" id="detailBody"></div></dialog>
+  <script>
+    const token=__LOCAL_TOKEN__;
+    let current={ready:false,records:[],summary:{},paper:{},progress:{}};
+    const $=id=>document.getElementById(id);
+    const escapeHtml=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+    function text(id,value){$(id).textContent=value}
+    async function call(path,options={}){const response=await fetch(path,{...options,headers:{"X-Chem-PDF-Extractor-Token":token,...options.headers}});if(!response.ok)throw Error(`本地服务返回 ${response.status}`);return response.json()}
+    async function download(kind,name){try{const response=await fetch(`/api/showcase/file?kind=${encodeURIComponent(kind)}`,{headers:{"X-Chem-PDF-Extractor-Token":token}});if(!response.ok)throw Error("文件尚未生成");const url=URL.createObjectURL(await response.blob());const a=document.createElement("a");a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000)}catch(error){showStatus(error.message,true)}}
+    function showStatus(message,error=false){$("statusLine").classList.toggle("error",error);text("statusText",message)}
+    function stage(number,state){const element=$(`step${number}`);element.classList.toggle("done",state===2);element.classList.toggle("active",state===1)}
+    function updateProgress(data){const p=data.progress||{};const ready=data.ready;stage(1,p.pdf_ready?2:1);stage(2,p.text_ready?2:p.pdf_ready?1:0);stage(3,ready?2:p.text_ready?1:0);stage(4,ready?2:0);stage(5,ready?2:0);
+      if(data.error)showStatus(data.error,true);else if(data.running)showStatus((data.message||"正在处理")+` · 已完成 ${p.chunks_done||0} 个提取片段`);else if(ready)showStatus(`运行完成：${data.summary.records} 条候选记录。请打开详情，对照原文人工核验。`);else if(p.pdf_ready)showStatus("论文 PDF 已准备好。点击“运行这篇论文”开始解析、提取和数据库查询。");else showStatus("找不到演示论文 PDF，请查看 input_pdfs/。",true);
+      $("runBtn").disabled=ready||data.running||!p.pdf_ready;$("runBtn").textContent=ready?"本篇已运行完成":data.running?"正在运行…":"运行这篇论文";
+      $("pdfBtn").disabled=!p.pdf_ready;for(const id of ["excelBtn","jsonBtn","sourceBtn"])$(id).disabled=!ready;
+    }
+    function updateMetrics(data){const s=data.summary||{};text("metricRecords",data.ready?s.records:"—");text("metricCompounds",data.ready?s.compounds:"—");text("metricReview",data.ready?s.needs_review:"—");text("metricCids",data.ready?s.pubchem_cids:"—")}
+    function updateCompounds(data){const strip=$("compoundStrip");strip.replaceChildren();if(!data.ready)return;
+      const counts=new Map();for(const row of data.records){if(row.record_type!=="chemical_candidate"||row.compound_role!=="tested")continue;const name=String(row.compound_name||"").trim(),key=name.toLocaleLowerCase();if(name){const old=counts.get(key)||{name,count:0};old.count++;counts.set(key,old)}}
+      for(const {name,count} of [...counts.values()].sort((a,b)=>b.count-a.count).slice(0,18)){const pill=document.createElement("span");pill.className="pill";pill.textContent=`${name} · ${count}`;strip.append(pill)}
+      if(!counts.size){const pill=document.createElement("span");pill.className="pill muted";pill.textContent="尚无可确认的化合物名称";strip.append(pill)}
+    }
+    function badge(row){if(row.record_type==="nonchemical_intervention")return '<span class="badge context">非化学干预</span>';if(row.record_type==="background_mention"||row.compound_role==="mentioned")return '<span class="badge context">背景/仅提及</span>';if(row.compound_role==="control")return '<span class="badge context">对照</span>';return row.needs_review?'<span class="badge">待核验</span>':'<span class="badge ok">字面支持</span>'}
+    function renderRows(){const body=$("recordRows"),term=$("searchBox").value.trim().toLocaleLowerCase(),origin=$("originFilter").value;body.replaceChildren();if(!current.ready){body.innerHTML='<tr><td class="empty" colspan="6">运行完成后在这里逐条查看实验记录</td></tr>';text("rowCount","尚无结果");return}
+      let count=0;for(const [index,row] of current.records.entries()){if(origin!=="all"&&row.evidence_origin!==origin)continue;const haystack=[row.compound_name,row.experiment_model,row.observed_result,row.assay_method].join(" ").toLocaleLowerCase();if(term&&!haystack.includes(term))continue;count++;
+        const tr=document.createElement("tr");tr.innerHTML=`<td>${escapeHtml(row.compound_name||"未报告")}</td><td>${escapeHtml(row.experiment_model||"未报告")}</td><td>${escapeHtml(row.treatment_dose||"未报告")}<br><span class="small">${escapeHtml(row.treatment_duration||"")}</span></td><td><span class="clamp">${escapeHtml(row.assay_method||row.measured_endpoint||"")}</span><span class="clamp small">${escapeHtml(row.observed_result||"")}</span></td><td>${badge(row)}</td><td><button class="detail-btn" type="button" data-index="${index}">查看原文与数据库</button></td>`;body.append(tr)}
+      if(!count)body.innerHTML='<tr><td class="empty" colspan="6">没有符合搜索条件的记录</td></tr>';text("rowCount",`显示 ${count} / ${current.records.length} 条记录`)
+    }
+    function item(label,value){return `<div class="detail-item"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value||"原文未报告")}</dd></div>`}
+    function openDetail(index){const row=current.records[index];if(!row)return;text("detailTitle",row.compound_name||"实验详情");
+      let html=`<div class="detail-grid">${item("记录编号",row.experiment_id)}${item("来源性质",row.evidence_origin)}${item("化合物角色",row.compound_role)}${item("实验模型",row.experiment_model)}${item("剂量 / 浓度",row.treatment_dose)}${item("处理时间",row.treatment_duration)}${item("对照组",row.control_group)}${item("实验方法",row.assay_method)}${item("测量终点",row.measured_endpoint)}${item("论文报告结果",row.observed_result)}${item("结果方向",row.reported_effect)}${item("数据库状态",row.enrichment_status)}</div>`;
+      html+='<h3 style="margin-top:22px">实验步骤（原文中可核对的部分）</h3>';const steps=Array.isArray(row.procedure_steps)?row.procedure_steps:[];html+=steps.length?steps.slice(0,8).map(s=>`<div class="quote">步骤 ${escapeHtml(s.step)} · ${escapeHtml(s.action||"")}<br><span class="small">${escapeHtml(s.status||"待核验")}</span></div>`).join(""):'<p class="small">这条记录未抽取到明确的步骤；不要自行补写常规流程。</p>';
+      html+='<h3 style="margin-top:22px">字段原文引文</h3>';const quotes=row.field_evidence||{};const keys=["compound_name","experiment_model","treatment_dose","treatment_duration","assay_method","observed_result"];let quoteCount=0;for(const key of keys){if(!quotes[key])continue;const check=(row.evidence_checks||{})[key]||{};html+=`<div class="quote"><b>${escapeHtml(key)}</b> · ${escapeHtml(check.status||"待核验")}<br>${escapeHtml(quotes[key])}</div>`;quoteCount++}if(!quoteCount)html+='<p class="small">没有可显示的逐字引文，请在 source.md 对照原 PDF 核查。</p>';
+      const links=[];const cid=String(row.pubchem_cid||"");const chembl=String(row.chembl_id||"");if(/^\d+$/.test(cid))links.push(`<a href="https://pubchem.ncbi.nlm.nih.gov/compound/${cid}" target="_blank" rel="noopener noreferrer">PubChem CID ${cid} ↗</a>`);if(/^CHEMBL\d+$/.test(chembl))links.push(`<a href="https://www.ebi.ac.uk/chembl/explore/compound/${chembl}" target="_blank" rel="noopener noreferrer">${chembl} ↗</a>`);for(const component of row.components||[]){const name=escapeHtml(component.name||"成分"),componentCid=String(component.pubchem_cid||""),componentChembl=String(component.chembl_id||"");if(/^\d+$/.test(componentCid))links.push(`<a href="https://pubchem.ncbi.nlm.nih.gov/compound/${componentCid}" target="_blank" rel="noopener noreferrer">${name} · PubChem ${componentCid} ↗</a>`);if(/^CHEMBL\d+$/.test(componentChembl))links.push(`<a href="https://www.ebi.ac.uk/chembl/explore/compound/${componentChembl}" target="_blank" rel="noopener noreferrer">${name} · ${componentChembl} ↗</a>`)}for(const pmid of String(row.related_pmids||"").split("; ").filter(x=>/^\d+$/.test(x)).slice(0,5))links.push(`<a href="https://pubmed.ncbi.nlm.nih.gov/${pmid}/" target="_blank" rel="noopener noreferrer">相关 PMID ${pmid} ↗</a>`);html+=`<h3 style="margin-top:22px">外部数据库</h3><p class="small">联合用药的成分链接只代表各成分身份，不能把联合用药结果归给任一单药。</p><div class="dialog-links">${links.join("")||"<span class='small'>未解析到可直接链接的数据库条目；查看 JSON 中的查询状态。</span>"}</div>`;
+      $("detailBody").innerHTML=html;$("detailDialog").showModal()}
+    async function refresh(){try{const data=await call("/api/showcase");const changed=JSON.stringify(data.summary)!==JSON.stringify(current.summary)||data.ready!==current.ready;current=data;text("paperTitle",data.paper.title||"演示论文");updateProgress(data);updateMetrics(data);if(changed){updateCompounds(data);renderRows()}}catch(error){showStatus(`无法连接本地服务：${error.message}`,true)}}
+    $("runBtn").addEventListener("click",async()=>{if(!confirm("将把这篇公开论文解析后的文字发送到本机配置的云端模型，并查询 PubChem、ChEMBL、PubMed。开始运行吗？"))return;$("runBtn").disabled=true;try{const result=await call("/api/showcase/start",{method:"POST"});if(!result.ok)throw Error(result.error||"启动失败");await refresh()}catch(error){showStatus(error.message,true);$("runBtn").disabled=false}});
+    $("pdfBtn").addEventListener("click",()=>download("pdf","PMC6796530-Hickson-2019.pdf"));$("excelBtn").addEventListener("click",()=>download("excel","experiments.xlsx"));$("jsonBtn").addEventListener("click",()=>download("json","report.json"));$("sourceBtn").addEventListener("click",()=>download("source","source.md"));
+    $("searchBox").addEventListener("input",renderRows);$("originFilter").addEventListener("change",renderRows);$("recordRows").addEventListener("click",event=>{const button=event.target.closest("button[data-index]");if(button)openDetail(Number(button.dataset.index))});$("closeDialog").addEventListener("click",()=>$("detailDialog").close());
+    refresh();setInterval(refresh,5000);
+  </script>
+</body>
+</html>

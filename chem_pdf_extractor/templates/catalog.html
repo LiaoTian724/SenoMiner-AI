@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>文献化合物目录 · Senolytics Knowledge</title>
+<link rel="stylesheet" href="/static/catalog.css">
+<script>window.LOCAL_TOKEN = __LOCAL_TOKEN__;</script>
+<script defer src="/static/3Dmol-min.js"></script>
+<script defer src="/static/catalog.js"></script>
+</head>
+<body>
+<header class="site-header">
+  <div class="container header-row">
+    <div><strong>Senolytics Knowledge</strong><span>文献化合物证据目录</span></div>
+    <nav aria-label="项目导航"><a href="/showcase">原始提取记录</a><a href="/">PDF 工作台</a></nav>
+  </div>
+</header>
+<main class="container">
+  <section class="intro">
+    <h1>文献报告的抗衰老候选化合物</h1>
+    <p>从原论文找到明确的化合物效果原句，再查看支持它的实验过程、结果和证据边界。</p>
+    <div id="statusLine" class="muted" aria-live="polite">正在读取本地报告…</div>
+  </section>
+  <section class="search-panel" aria-labelledby="searchHeading">
+    <h2 id="searchHeading">查找原始研究</h2>
+    <div class="form-line"><input id="pubmedQuery" type="search" aria-label="PubMed 检索词" placeholder="PubMed 关键词，例如 fisetin senolytic"><button id="searchPubmed" class="primary">搜索 PubMed</button></div>
+    <p class="muted small">检索结果需取得公开全文后才会进入提取流程；仅有摘要不会生成目录条目。</p>
+    <div id="searchResults" hidden><h3>检索结果</h3><div id="searchResultRows"></div></div>
+  </section>
+  <div class="main-grid">
+    <section class="catalog-section" aria-labelledby="catalogHeading">
+      <div class="section-title"><div><h2 id="catalogHeading">化合物目录</h2><p id="catalogCount" class="muted"></p></div><input id="catalogSearch" type="search" aria-label="搜索已收录化合物" placeholder="筛选化合物或论文"></div>
+      <div class="table-wrap"><table class="catalog-table"><thead><tr><th>化合物 / 联合用药</th><th>主要发现</th><th>来源文献</th><th>独立实验</th><th></th></tr></thead><tbody id="catalogRows"></tbody></table></div>
+      <nav class="pagination" aria-label="目录分页"><span id="pageInfo"></span><label>每页 <select id="pageSize" aria-label="每页条数"><option value="5">5</option><option value="10">10</option><option value="20">20</option></select> 条</label><button id="prevPage">上一页</button><label>跳到第 <select id="pageSelect" aria-label="选择页码"></select> 页</label><button id="nextPage">下一页</button></nav>
+      <p class="muted small">每篇论文先显示一条有原文定位的核心发现。其他独立实验和技术细节可以在详情中展开。</p>
+      <details class="review-log"><summary>查看文献收录复核</summary><div id="paperReviewRows"></div></details>
+    </section>
+    <aside class="side-panel" aria-labelledby="inputHeading">
+      <h2 id="inputHeading">添加本地 PDF</h2>
+      <input id="pdfUpload" type="file" accept="application/pdf,.pdf" aria-label="选择 PDF">
+      <button id="uploadBtn">加入输入目录</button>
+      <div id="localPdfRows" class="local-list"></div>
+      <p class="muted small">点击“提取”后，论文文字会发送到本机配置的云端模型。</p>
+      <hr>
+      <h3>当前口径</h3>
+      <p class="small">只有经全文复核、明确作用于衰老的本篇实验证据进入目录。诱导衰老、对照、一般抗肿瘤或机制变化不作为抗衰老药效。</p>
+    </aside>
+  </div>
+  <p id="message" class="message" role="status" aria-live="polite"></p>
+</main>
+<dialog id="detailDialog" aria-labelledby="detailTitle">
+  <header class="dialog-header"><div><small>化合物证据档案</small><h2 id="detailTitle"></h2></div><button id="closeDetail" aria-label="关闭详情">关闭</button></header>
+  <div id="detailBody" class="dialog-body"></div>
+</dialog>
+</body>
+</html>

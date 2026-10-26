@@ -1,0 +1,61 @@
+"""Paper inputs via local documents or the vendored PubMed skill."""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any
+
+from .pdf import read_pdf_as_markdown_with_mode
+from .science_skills import SkillError
+
+
+def load_paper(value: str, skills: Any, runtime: Any, pdf_mode: str = "pymupdf4llm") -> dict:
+    path = Path(value).expanduser()
+    if path.is_file():
+        if path.suffix.lower() == ".pdf":
+            text, parser = read_pdf_as_markdown_with_mode(path, pdf_mode, runtime)
+        elif path.suffix.lower() in {".txt", ".md"}:
+            text, parser = path.read_text(encoding="utf-8"), "text"
+        else:
+            raise ValueError("Supported files: PDF, UTF-8 TXT, Markdown")
+        if not text.strip():
+            raise ValueError("No extractable text; provide OCR text for scanned PDFs")
+        return {"source": path.name, "text": text, "scope": "local_document", "parser": parser}
+    identifier = value.strip()
+    pmid = ""
+    if re.fullmatch(r"(?:PMID:)?\s*\d+", identifier, re.I):
+        pmid = re.sub(r"\D", "", identifier)
+    elif re.fullmatch(r"(?:PMC:)?\s*PMC\d+", identifier, re.I):
+        pmcid = re.search(r"PMC\d+", identifier, re.I).group().upper()
+        ids = skills.call("pubmed", "find_linked_biological_data", pmcid[3:], "pubmed", "pmc_pubmed", "--dbfrom", "pmc")
+        if len(ids) == 1:
+            pmid = str(ids[0])
+    else:
+        doi = re.sub(r"^(?:doi:|https?://doi.org/)", "", identifier, flags=re.I).strip()
+        if not re.fullmatch(r"10\.\d{4,9}/[^\s\"\[\]]+", doi):
+            raise ValueError("Input must be a file, PMID, PMC ID, or DOI")
+        ids = skills.call("pubmed", "search_pubmed", f'"{doi}"[AID]', "--max_results", "2")
+        if len(ids) == 1:
+            pmid = str(ids[0])
+    if not pmid.isdigit():
+        raise ValueError("No unique PubMed record matches this identifier")
+    papers = skills.call("pubmed", "fetch_article_abstracts", pmid)
+    if not papers or not papers[0].get("title"):
+        raise ValueError("PubMed record has no article metadata")
+    paper = papers[0]
+    text = ""
+    scope = "abstract_only"
+    try:
+        full = skills.call("pubmed", "get_full_text_pmc", pmid)
+        text = full.get("full_text", "")
+        if text.strip():
+            scope = "oa_full_text"
+    except SkillError:
+        pass
+    if not text.strip():
+        text = paper.get("abstract") or ""
+    if not text.strip():
+        raise ValueError("No accessible full text or abstract; supply the PDF")
+    return {"source": f"PMID:{pmid}", "pmid": pmid, "doi": paper.get("doi") or "",
+            "title": paper["title"], "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+            "text": text, "scope": scope, "parser": "science_skills_pubmed"}

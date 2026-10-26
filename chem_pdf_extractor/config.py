@@ -1,0 +1,1174 @@
+from __future__ import annotations
+
+import importlib
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.parse
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+DEFAULT_MODEL = "minicpm-v:latest"
+DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+DEFAULT_MAX_CHARS = 0
+DEFAULT_NUM_CTX = 8192
+DEFAULT_CLOUD_SERVICE_NAME = "openai_compatible"
+DEFAULT_CLOUD_MODEL = "provider/model-name"
+DEFAULT_CLOUD_BASE_URL = "https://api.example.com/v1"
+DEFAULT_CLOUD_API_KEY = ""
+LOCAL_CONFIG_NAME = "config.local.json"
+USER_ROOT_ENV_VAR = "CHEM_PDF_EXTRACTOR_USER_ROOT"
+DEFAULT_OUTPUT_DIR_NAME = "output"
+DEFAULT_PDF_MODE = "pymupdf4llm"
+PDF_MODE_CHOICES = ["auto", "pypdf_text", "pymupdf4llm", "pymupdf_text", "mineru"]
+PLACEHOLDER_CLOUD_BASE_URL_MARKERS = {"api.example.com"}
+PLACEHOLDER_CLOUD_MODELS = {"provider/model-name", "model-name", "your-model-name"}
+PLACEHOLDER_CLOUD_API_KEYS = {
+    "your_api_key_here",
+    "your_api_key",
+    "api_key_here",
+    "your-key-here",
+    "your-api-key",
+    "sk-your-api-key",
+}
+MAX_ARTIFACT_NAME_CHARS = 80
+OUTPUT_EXCEL_NAME = "提取结果.xlsx"
+ERROR_LOG_NAME = "错误日志.txt"
+PARTIAL_JSONL_NAME = "提取结果.partial.jsonl"
+BAD_ROWS_EXCEL_NAME = "坏数据.xlsx"
+BAD_ROWS_JSONL_NAME = "坏数据.jsonl"
+SUSPICIOUS_ROWS_EXCEL_NAME = "可疑数据.xlsx"
+SUSPICIOUS_ROWS_JSONL_NAME = "可疑数据.jsonl"
+ERROR_STATS_EXCEL_NAME = "错误统计.xlsx"
+ERROR_STATS_JSONL_NAME = "错误统计.jsonl"
+MARKDOWN_DIR_NAME = "md文件"
+CACHE_DIR_NAME = "抽取缓存"
+FAILED_SOURCES_DIR_NAME = "提取失败源文件"
+BUNDLED_RUNTIME_DIR_NAME = "bundled_runtime"
+LEGACY_BUNDLED_RUNTIME_DIR_NAMES = ["YiLaiHuanJing", "运行依赖"]
+BAD_ROW_MIN_FILL_RATE = 0.40
+BAD_ROW_EMPTY_MARKERS = {"n/a", "na", "null", "none", "-999"}
+BAD_ROW_FIELD_WEIGHTS = {"required": 1.0, "recommended": 0.5, "optional": 0.0}
+EXTRACTION_CACHE_VERSION = "2026-10-biology-v1"
+CLOUD_RETRY_COUNT = 3
+CLOUD_RETRY_BASE_DELAY_SECONDS = 2.0
+CLOUD_RETRY_MAX_DELAY_SECONDS = 20.0
+DEFAULT_CLOUD_MODEL_SUGGESTIONS = ["provider/model-name"]
+
+MINERU_COMMAND = os.environ.get("MINERU_COMMAND") or os.environ.get("MINERU_EXE") or "mineru"
+MINERU_EXE = Path(MINERU_COMMAND)
+MINERU_OUTPUT_ROOT = Path(os.environ.get("MINERU_OUTPUT_ROOT", str(PROJECT_ROOT / ".mineru_outputs")))
+MINERU_DEFAULT_BACKEND = os.environ.get("MINERU_BACKEND", "pipeline")
+MINERU_DEFAULT_METHOD = os.environ.get("MINERU_METHOD", "txt")
+MINERU_DEFAULT_FORMULA = os.environ.get("MINERU_FORMULA", "false")
+MINERU_DEFAULT_TABLE = os.environ.get("MINERU_TABLE", "false")
+
+CORE_REQUIRED_PACKAGES = {
+    "pypdf": "pypdf",
+    "langchain": "langchain",
+    "langchain_core": "langchain-core",
+    "langchain_ollama": "langchain-ollama",
+    "pydantic": "pydantic",
+    "pandas": "pandas",
+    "openpyxl": "openpyxl",
+}
+
+OPTIONAL_PDF_BACKEND_PACKAGES = {
+    "pymupdf4llm": "pymupdf4llm",
+    "pymupdf": "pymupdf",
+}
+
+from .biology import ANTI_AGING_FIELDS
+DEFAULT_FIELDS = ANTI_AGING_FIELDS
+
+CHINESE_TRANSLATION_FIELDS = {
+    "工艺名称", "原料", "CAS号", "催化剂通用名", "具体型号/牌号",
+    "催化剂制备方法", "催化剂类型", "物理形状", "催化剂寿命",
+    "反应温度（℃）", "温度误差", "反应压力（MPa）", "压力误差",
+    "反应规模/空速", "数据类型/实验室/工业化", "反应器形式", "物性方法",
+    "转化率（%）", "选择性（%）", "产物组成",
+    "产物1: 名称", "产物1: CAS号", "产物1: 数值",
+    "产物2: 名称", "产物2: CAS号", "产物2: 数值",
+    "产物3: 名称", "产物3: 数值", "产物4: 名称", "产物4: 数值",
+    "数据来源", "产品分离", "反应热", "反应机理",
+}
+
+EXPORT_EXCLUDED_COLUMNS = [
+    "source_path", "source_file", "record_index", "record_count",
+    "llm_provider", "llm_service", "llm_model", "ollama_model",
+    "pdf_to_md_mode", "markdown_chars_total", "markdown_chars_used",
+    "was_truncated", "quality_retry_used",
+]
+
+REVIEW_AID_FIELD_LABELS = [
+    "source_evidence",
+    "source_hint",
+    "verification_status",
+    "review_note",
+    "page_hint",
+    "section_hint",
+    "table_hint",
+]
+
+REVIEW_AID_FIELDS = [
+    {
+        "label": "source_evidence",
+        "type": "str",
+        "requirement": "optional",
+        "description": (
+            "Extract a short source excerpt from the converted PDF text that supports the row. "
+            "Prefer the sentence, table row, caption fragment, or nearby phrase that directly "
+            "supports the extracted values. Keep it short. Do not invent evidence. If no clear "
+            "source evidence is found, leave empty."
+        ),
+    },
+    {
+        "label": "source_hint",
+        "type": "str",
+        "requirement": "optional",
+        "description": (
+            "Indicate where the evidence appears to come from. Use one of: body_text, table, "
+            "figure_caption, supplementary, ocr_text, not_clear. Do not invent source hints. "
+            "If uncertain, use not_clear."
+        ),
+    },
+    {
+        "label": "verification_status",
+        "type": "str",
+        "requirement": "optional",
+        "description": (
+            "Provide a review-oriented status, not a statistical confidence score. Use one of: "
+            "direct_text_match, inferred, needs_review, low_confidence. Use direct_text_match "
+            "only when the value is directly supported by nearby text or a table. Use inferred "
+            "when interpretation or unit conversion was needed. Use needs_review when the source "
+            "is unclear or multiple interpretations are possible. Use low_confidence when evidence "
+            "is weak. Do not invent verification support."
+        ),
+    },
+    {
+        "label": "review_note",
+        "type": "str",
+        "requirement": "optional",
+        "description": (
+            "Briefly explain why the row should or should not be reviewed. Mention uncertainty, "
+            "unit conversion, missing context, OCR ambiguity, table complexity, or unclear source "
+            "when applicable. Keep it short. Do not include long paper text. Do not invent "
+            "provenance details."
+        ),
+    },
+    {
+        "label": "page_hint",
+        "type": "str",
+        "requirement": "optional",
+        "description": (
+            'Optional review aid. Use visible page markers such as "Page 3" only if '
+            "available in the converted text. Do not invent page numbers. Leave empty "
+            "when unclear."
+        ),
+    },
+    {
+        "label": "section_hint",
+        "type": "str",
+        "requirement": "optional",
+        "description": (
+            "Optional review aid. Prefer abstract, experimental, results, table caption, "
+            "figure caption, or nearby heading when clear. Do not invent sections. Leave "
+            "empty when unclear."
+        ),
+    },
+    {
+        "label": "table_hint",
+        "type": "str",
+        "requirement": "optional",
+        "description": (
+            "Optional review aid. Prefer table number, table caption, or nearby row/caption "
+            "when clear. Do not invent table identifiers. Leave empty when unclear."
+        ),
+    },
+]
+
+
+@dataclass
+class RuntimeDeps:
+    pd: Any
+    PdfReader: Any
+    ChatPromptTemplate: Any
+    ChatOllama: Any
+    Field: Any
+    create_model: Any
+    pymupdf4llm: Any | None = None
+    pymupdf: Any | None = None
+
+
+def script_dir() -> Path:
+    return PROJECT_ROOT
+
+
+def app_root() -> Path:
+    return PROJECT_ROOT
+
+
+def default_user_root() -> Path:
+    configured = os.environ.get(USER_ROOT_ENV_VAR)
+    if configured and configured.strip():
+        return Path(configured).expanduser().resolve()
+    return PROJECT_ROOT
+
+
+def user_runtime_dir() -> Path:
+    return default_user_root() / ".runtime"
+
+
+def default_input_dir() -> Path:
+    path = default_user_root() / "input_pdfs"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def default_output_path() -> Path:
+    path = default_user_root() / DEFAULT_OUTPUT_DIR_NAME
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def local_config_path() -> Path:
+    if os.environ.get(USER_ROOT_ENV_VAR):
+        return user_runtime_dir() / LOCAL_CONFIG_NAME
+    return script_dir() / LOCAL_CONFIG_NAME
+
+
+def mask_api_key(key: str) -> str:
+    key = (key or "").strip()
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return key[:2] + "..."
+    return key[:4] + "..." + key[-2:]
+
+
+def _bool_config_value(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+KNOWN_CLOUD_PROFILE_HOSTS = [
+    ("token-plan-cn.xiaomimimo.com", "xiaomi_mimo", "Xiaomi Mimo", "小米 Mimo"),
+    ("xiaomimimo.com", "xiaomi_mimo", "Xiaomi Mimo", "小米 Mimo"),
+    ("api.deepseek.com", "deepseek", "DeepSeek", "DeepSeek"),
+    ("deepseek.com", "deepseek", "DeepSeek", "DeepSeek"),
+    ("api.openai.com", "openai", "OpenAI", "OpenAI"),
+    ("openai.com", "openai", "OpenAI", "OpenAI"),
+]
+
+
+def _cloud_base_url_host(base_url: str) -> str:
+    raw = str(base_url or "").strip()
+    if not raw:
+        return ""
+    parsed = urllib.parse.urlsplit(raw if "://" in raw else f"https://{raw}")
+    return (parsed.hostname or "").lower().strip(".")
+
+
+def _cloud_base_url_match_key(base_url: str) -> str:
+    return str(base_url or "").strip().rstrip("/")
+
+
+def _cloud_profile_matches_base_url(profile: dict[str, Any] | None, base_url: str) -> bool:
+    if not profile:
+        return False
+    return _cloud_base_url_match_key(str(profile.get("base_url") or "")) == _cloud_base_url_match_key(base_url)
+
+
+def _readable_host_name(host: str) -> str:
+    labels = [part for part in str(host or "").lower().split(".") if part]
+    if not labels:
+        return DEFAULT_CLOUD_SERVICE_NAME
+    while labels and labels[0] in {"api", "gateway", "openai-compatible"}:
+        labels.pop(0)
+    if len(labels) >= 2 and labels[-1] in {"com", "cn", "net", "org", "ai", "io", "dev"}:
+        candidate = labels[-2]
+    else:
+        candidate = labels[0] if labels else str(host)
+    special = {
+        "openai": "OpenAI",
+        "deepseek": "DeepSeek",
+        "openrouter": "OpenRouter",
+        "xiaomimimo": "Xiaomi Mimo",
+    }
+    if candidate in special:
+        return special[candidate]
+    words = [word for word in re.split(r"[-_]+", candidate) if word]
+    if not words:
+        return host
+    return " ".join(word[:1].upper() + word[1:] for word in words)
+
+
+def infer_cloud_profile_names(base_url: str) -> dict[str, str]:
+    host = _cloud_base_url_host(base_url)
+    for known_host, service_id, display_en, display_zh in KNOWN_CLOUD_PROFILE_HOSTS:
+        if host == known_host or host.endswith("." + known_host):
+            return {
+                "service_name": service_id,
+                "display_name": display_en,
+                "display_name_en": display_en,
+                "display_name_zh": display_zh,
+            }
+    display = _readable_host_name(host)
+    return {
+        "service_name": _slugify_profile_id(display or host or DEFAULT_CLOUD_SERVICE_NAME, DEFAULT_CLOUD_SERVICE_NAME),
+        "display_name": display,
+        "display_name_en": display,
+        "display_name_zh": display,
+    }
+
+
+def _slugify_profile_id(value: str, fallback: str = "cloud") -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+    return slug or fallback
+
+
+def _unique_profile_id(base_id: str, existing_ids: set[str]) -> str:
+    profile_id = _slugify_profile_id(base_id)
+    if profile_id not in existing_ids:
+        return profile_id
+    index = 2
+    while f"{profile_id}-{index}" in existing_ids:
+        index += 1
+    return f"{profile_id}-{index}"
+
+
+def _normalize_cloud_profile(raw: dict[str, Any], existing_ids: set[str] | None = None) -> dict[str, Any]:
+    raw = raw or {}
+    base_url = str(raw.get("base_url") or raw.get("cloud_base_url") or DEFAULT_CLOUD_BASE_URL).strip()
+    inferred = infer_cloud_profile_names(base_url)
+    service_name = str(
+        raw.get("service_name")
+        or raw.get("cloud_service_name")
+        or raw.get("llm_service_name")
+        or inferred["service_name"]
+        or DEFAULT_CLOUD_SERVICE_NAME
+    ).strip()
+    profile_id = str(raw.get("id") or raw.get("profile_id") or raw.get("cloud_profile_id") or "").strip()
+    if not profile_id:
+        profile_id = _unique_profile_id(service_name or inferred["service_name"], existing_ids or set())
+    display_name = str(raw.get("display_name") or raw.get("name") or inferred["display_name"]).strip()
+    display_name_en = str(raw.get("display_name_en") or raw.get("name_en") or display_name or inferred["display_name_en"]).strip()
+    display_name_zh = str(raw.get("display_name_zh") or raw.get("name_zh") or inferred["display_name_zh"] or display_name).strip()
+    return {
+        "id": profile_id,
+        "display_name": display_name or display_name_en or display_name_zh or service_name,
+        "display_name_en": display_name_en or display_name or service_name,
+        "display_name_zh": display_name_zh or display_name or service_name,
+        "service_name": service_name or DEFAULT_CLOUD_SERVICE_NAME,
+        "base_url": base_url,
+        "api_key": str(raw.get("api_key") or raw.get("cloud_api_key") or "").strip(),
+        "model": str(raw.get("model") or raw.get("cloud_model") or DEFAULT_CLOUD_MODEL).strip(),
+    }
+
+
+def _profile_contains_real_config(profile: dict[str, Any]) -> bool:
+    return any(
+        str(profile.get(key) or "").strip()
+        for key in ("api_key", "base_url", "model", "service_name")
+    )
+
+
+def _profile_by_id(config: dict[str, Any], profile_id: str | None) -> dict[str, Any] | None:
+    wanted = str(profile_id or "").strip()
+    if not wanted:
+        return None
+    for profile in config.get("cloud_profiles", []) or []:
+        if str(profile.get("id") or "") == wanted:
+            return profile
+    return None
+
+
+def _matching_profile(config: dict[str, Any], base_url: str, model: str) -> dict[str, Any] | None:
+    profiles = config.get("cloud_profiles", []) or []
+    normalized_base = _cloud_base_url_match_key(base_url)
+    normalized_model = str(model or "").strip()
+    for profile in profiles:
+        if (
+            _cloud_base_url_match_key(str(profile.get("base_url") or "")) == normalized_base
+            and str(profile.get("model") or "").strip() == normalized_model
+        ):
+            return profile
+    for profile in profiles:
+        if _cloud_base_url_match_key(str(profile.get("base_url") or "")) == normalized_base:
+            return profile
+    return None
+
+
+def public_cloud_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    api_key = str(profile.get("api_key") or "").strip()
+    return {
+        "id": profile.get("id") or "",
+        "display_name": profile.get("display_name") or profile.get("display_name_en") or "",
+        "display_name_en": profile.get("display_name_en") or profile.get("display_name") or "",
+        "display_name_zh": profile.get("display_name_zh") or profile.get("display_name") or "",
+        "service_name": profile.get("service_name") or DEFAULT_CLOUD_SERVICE_NAME,
+        "base_url": profile.get("base_url") or DEFAULT_CLOUD_BASE_URL,
+        "model": profile.get("model") or DEFAULT_CLOUD_MODEL,
+        "has_api_key": bool(api_key),
+        "cloud_api_key_prefix": mask_api_key(api_key),
+    }
+
+
+def normalize_local_config(raw: dict[str, Any] | None) -> dict[str, Any]:
+    raw = raw or {}
+    normalized = {
+        "cloud_service_name": str(
+            raw.get("cloud_service_name")
+            or raw.get("llm_service_name")
+            or raw.get("service_name")
+            or DEFAULT_CLOUD_SERVICE_NAME
+        ).strip(),
+        "cloud_api_key": str(raw.get("cloud_api_key") or raw.get("api_key") or "").strip(),
+        "cloud_base_url": str(raw.get("cloud_base_url") or raw.get("base_url") or DEFAULT_CLOUD_BASE_URL).strip(),
+        "cloud_model": str(raw.get("cloud_model") or raw.get("model") or DEFAULT_CLOUD_MODEL).strip(),
+        "cloud_active": _bool_config_value(raw.get("cloud_active"), False),
+        "copy_failed_sources": _bool_config_value(raw.get("copy_failed_sources"), False),
+    }
+    profiles: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for raw_profile in raw.get("cloud_profiles") or raw.get("cloud_api_profiles") or []:
+        if not isinstance(raw_profile, dict):
+            continue
+        profile = _normalize_cloud_profile(raw_profile, seen_ids)
+        if not _profile_contains_real_config(profile):
+            continue
+        seen_ids.add(str(profile["id"]))
+        profiles.append(profile)
+
+    active_profile_id = ""
+    active_profile_id_was_provided = False
+    for key in ("active_cloud_profile_id", "active_cloud_profile", "cloud_profile_id"):
+        if key in raw:
+            active_profile_id = str(raw.get(key) or "").strip()
+            active_profile_id_was_provided = True
+            break
+
+    has_flat_cloud_config = any(
+        key in raw and str(raw.get(key) or "").strip()
+        for key in (
+            "cloud_service_name", "llm_service_name", "service_name",
+            "cloud_api_key", "api_key", "cloud_base_url", "base_url",
+            "cloud_model", "model",
+        )
+    )
+    if not profiles and has_flat_cloud_config:
+        profile = _normalize_cloud_profile(
+            {
+                "id": active_profile_id or raw.get("cloud_service_name") or raw.get("llm_service_name") or raw.get("service_name"),
+                "service_name": normalized["cloud_service_name"],
+                "api_key": normalized["cloud_api_key"],
+                "base_url": normalized["cloud_base_url"],
+                "model": normalized["cloud_model"],
+            },
+            seen_ids,
+        )
+        profiles.append(profile)
+        active_profile_id = profile["id"]
+
+    if profiles:
+        active_profile = _profile_by_id({"cloud_profiles": profiles}, active_profile_id)
+        if active_profile is None and (active_profile_id or not active_profile_id_was_provided):
+            active_profile = profiles[0]
+        if active_profile is not None:
+            active_profile_id = str(active_profile.get("id") or "")
+            normalized["cloud_service_name"] = str(active_profile.get("service_name") or normalized["cloud_service_name"]).strip()
+            normalized["cloud_api_key"] = str(active_profile.get("api_key") or normalized["cloud_api_key"]).strip()
+            normalized["cloud_base_url"] = str(active_profile.get("base_url") or normalized["cloud_base_url"]).strip()
+            normalized["cloud_model"] = str(active_profile.get("model") or normalized["cloud_model"]).strip()
+        else:
+            active_profile_id = ""
+
+    normalized["cloud_profiles"] = profiles
+    normalized["active_cloud_profile_id"] = active_profile_id
+    return normalized
+
+
+def load_local_config() -> dict[str, Any]:
+    path = local_config_path()
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict):
+            return normalize_local_config(data)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {}
+
+
+def save_local_config(config: dict[str, Any]) -> Path:
+    existing = load_local_config()
+    incoming = dict(config or {})
+    profile_id_was_provided = any(
+        key in incoming
+        for key in ("active_cloud_profile_id", "cloud_profile_id", "profile_id")
+    )
+    incoming_profile_id = str(
+        incoming.get("active_cloud_profile_id")
+        or incoming.get("cloud_profile_id")
+        or incoming.get("profile_id")
+        or ("" if profile_id_was_provided else existing.get("active_cloud_profile_id"))
+        or ""
+    ).strip()
+    incoming_base_url = str(incoming.get("cloud_base_url") or incoming.get("base_url") or "").strip()
+    incoming_model = str(incoming.get("cloud_model") or incoming.get("model") or "").strip()
+    if incoming_base_url and not str(
+        incoming.get("cloud_service_name")
+        or incoming.get("llm_service_name")
+        or incoming.get("service_name")
+        or ""
+    ).strip():
+        incoming["cloud_service_name"] = infer_cloud_profile_names(incoming_base_url)["service_name"]
+    existing_profile = (
+        _profile_by_id(existing, incoming_profile_id)
+        or _matching_profile(existing, incoming_base_url, incoming_model)
+    )
+    incoming_key = str(incoming.get("cloud_api_key") or incoming.get("api_key") or "").strip()
+    if not incoming_key and existing_profile and not bool(incoming.get("clear_cloud_api_key", False)):
+        incoming["api_key"] = existing_profile.get("api_key", "")
+        incoming["cloud_api_key"] = existing_profile.get("api_key", "")
+
+    normalized = normalize_local_config(incoming)
+    existing_profiles = [dict(profile) for profile in existing.get("cloud_profiles", []) or []]
+    update_profile = normalized.get("cloud_profiles", [None])[0] if normalized.get("cloud_profiles") else None
+    if update_profile:
+        if existing_profile:
+            update_profile["id"] = existing_profile.get("id") or update_profile["id"]
+        existing_ids = {str(profile.get("id") or "") for profile in existing_profiles if profile is not existing_profile}
+        if update_profile["id"] in existing_ids and not existing_profile:
+            update_profile["id"] = _unique_profile_id(update_profile["id"], existing_ids)
+        profiles = [profile for profile in existing_profiles if profile.get("id") != update_profile["id"]]
+        profiles.append(update_profile)
+        normalized["cloud_profiles"] = profiles
+        normalized["active_cloud_profile_id"] = update_profile["id"]
+        normalized["cloud_service_name"] = update_profile["service_name"]
+        normalized["cloud_api_key"] = update_profile["api_key"]
+        normalized["cloud_base_url"] = update_profile["base_url"]
+        normalized["cloud_model"] = update_profile["model"]
+    elif existing_profiles:
+        normalized["cloud_profiles"] = existing_profiles
+
+    payload = {
+        "llm_service_name": normalized["cloud_service_name"],
+        "api_key": normalized["cloud_api_key"],
+        "base_url": normalized["cloud_base_url"],
+        "model": normalized["cloud_model"],
+        "cloud_active": normalized["cloud_active"],
+        "copy_failed_sources": normalized["copy_failed_sources"],
+        "active_cloud_profile_id": normalized.get("active_cloud_profile_id") or "",
+        "cloud_profiles": normalized.get("cloud_profiles", []),
+    }
+    path = local_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    return path
+
+
+def delete_cloud_profile(profile_id: str) -> bool:
+    target_id = str(profile_id or "").strip()
+    if not target_id:
+        return False
+
+    path = local_config_path()
+    if not path.exists():
+        return False
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(raw, dict):
+        return False
+
+    normalized = normalize_local_config(raw)
+    profiles = [dict(profile) for profile in normalized.get("cloud_profiles", []) or []]
+    target_profile = _profile_by_id({"cloud_profiles": profiles}, target_id)
+    if target_profile is None:
+        return False
+
+    active_profile_id = str(normalized.get("active_cloud_profile_id") or "").strip()
+    remaining_profiles = [profile for profile in profiles if str(profile.get("id") or "") != target_id]
+    active_profile = _profile_by_id({"cloud_profiles": remaining_profiles}, active_profile_id)
+
+    if active_profile is not None:
+        next_active_profile_id = active_profile_id
+        cloud_service_name = str(active_profile.get("service_name") or DEFAULT_CLOUD_SERVICE_NAME).strip()
+        cloud_api_key = str(active_profile.get("api_key") or "").strip()
+        cloud_base_url = str(active_profile.get("base_url") or DEFAULT_CLOUD_BASE_URL).strip()
+        cloud_model = str(active_profile.get("model") or DEFAULT_CLOUD_MODEL).strip()
+    else:
+        next_active_profile_id = ""
+        cloud_service_name = DEFAULT_CLOUD_SERVICE_NAME
+        cloud_api_key = ""
+        cloud_base_url = DEFAULT_CLOUD_BASE_URL
+        cloud_model = DEFAULT_CLOUD_MODEL
+
+    payload = {
+        "llm_service_name": cloud_service_name,
+        "api_key": cloud_api_key,
+        "base_url": cloud_base_url,
+        "model": cloud_model,
+        "cloud_active": bool(normalized.get("cloud_active", False)),
+        "copy_failed_sources": bool(normalized.get("copy_failed_sources", False)),
+        "active_cloud_profile_id": next_active_profile_id,
+        "cloud_profiles": remaining_profiles,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    return True
+
+
+def public_local_config() -> dict[str, Any]:
+    config = load_local_config()
+    api_key = str(config.get("cloud_api_key") or "").strip()
+    return {
+        "cloud_service_name": config.get("cloud_service_name") or DEFAULT_CLOUD_SERVICE_NAME,
+        "cloud_base_url": config.get("cloud_base_url") or DEFAULT_CLOUD_BASE_URL,
+        "cloud_model": config.get("cloud_model") or DEFAULT_CLOUD_MODEL,
+        "cloud_active": bool(config.get("cloud_active", False)),
+        "has_cloud_api_key": bool(api_key),
+        "cloud_api_key_prefix": mask_api_key(api_key),
+        "active_cloud_profile_id": config.get("active_cloud_profile_id") or "",
+        "cloud_profiles": [
+            public_cloud_profile(profile)
+            for profile in config.get("cloud_profiles", []) or []
+        ],
+        "copy_failed_sources": bool(config.get("copy_failed_sources", False)),
+    }
+
+
+def apply_cloud_config_defaults(config: dict[str, Any]) -> dict[str, Any]:
+    local_config = load_local_config()
+    env_api_key = os.environ.get("CHEM_PDF_EXTRACTOR_API_KEY") or os.environ.get("CHEM_EXTRACTOR_CLOUD_API_KEY") or ""
+    selected_profile = _profile_by_id(
+        local_config,
+        str(config.get("active_cloud_profile_id") or config.get("cloud_profile_id") or "").strip(),
+    )
+    requested_base_url = str(config.get("cloud_base_url") or config.get("base_url") or "").strip()
+    selected_profile_can_provide_key = bool(
+        selected_profile
+        and (
+            not requested_base_url
+            or _cloud_profile_matches_base_url(selected_profile, requested_base_url)
+        )
+    )
+    local_config_can_provide_key = bool(
+        not requested_base_url
+        or _cloud_base_url_match_key(str(local_config.get("cloud_base_url") or ""))
+        == _cloud_base_url_match_key(requested_base_url)
+    )
+    defaults = {
+        "cloud_service_name": (selected_profile or {}).get("service_name") or local_config.get("cloud_service_name") or DEFAULT_CLOUD_SERVICE_NAME,
+        "cloud_model": (selected_profile or {}).get("model") or local_config.get("cloud_model") or os.environ.get("CHEM_PDF_EXTRACTOR_MODEL") or DEFAULT_CLOUD_MODEL,
+        "cloud_base_url": (selected_profile or {}).get("base_url") or local_config.get("cloud_base_url") or os.environ.get("CHEM_PDF_EXTRACTOR_BASE_URL") or DEFAULT_CLOUD_BASE_URL,
+        "cloud_api_key": (
+            (selected_profile or {}).get("api_key") if selected_profile_can_provide_key else ""
+        ) or (local_config.get("cloud_api_key") if local_config_can_provide_key else "") or env_api_key or DEFAULT_CLOUD_API_KEY,
+        "cloud_active": local_config.get("cloud_active", False),
+        "copy_failed_sources": local_config.get("copy_failed_sources", False),
+    }
+    if not str(config.get("active_cloud_profile_id") or "").strip():
+        config["active_cloud_profile_id"] = (selected_profile or {}).get("id") or local_config.get("active_cloud_profile_id") or ""
+    for key, value in defaults.items():
+        if key == "cloud_active":
+            config.setdefault(key, value)
+        elif not str(config.get(key) or "").strip():
+            config[key] = value
+    return config
+
+
+def validate_cloud_base_url_security(base_url: str) -> str | None:
+    raw = str(base_url or "").strip()
+    if not raw:
+        return "Please enter an OpenAI-compatible Base URL."
+    parsed = urllib.parse.urlsplit(raw)
+    if not parsed.scheme or not parsed.netloc:
+        return "Please enter a valid OpenAI-compatible Base URL."
+    if parsed.username or parsed.password:
+        return "Base URL must not include username/password credentials."
+    if parsed.query or parsed.fragment:
+        return "Base URL must not include query string or fragment."
+    lowered = raw.rstrip("/").lower()
+    if any(marker in lowered for marker in PLACEHOLDER_CLOUD_BASE_URL_MARKERS):
+        return "Please enter a real OpenAI-compatible Base URL."
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    if scheme == "https":
+        return None
+    if scheme == "http" and host in {"127.0.0.1", "localhost", "::1"}:
+        return None
+    if scheme == "http":
+        return "For cloud providers, use HTTPS Base URL. Plain HTTP is allowed only for localhost."
+    return "Unsupported Base URL scheme. Use HTTPS for cloud providers."
+
+
+def validate_cloud_start_config(config: dict[str, Any]) -> str | None:
+    if str(config.get("llm_provider") or "").strip().lower() != "cloud":
+        return None
+
+    api_key = str(config.get("cloud_api_key") or config.get("api_key") or "").strip()
+    if not api_key:
+        return (
+            "Cloud API Key is required for --llm-provider cloud. "
+            "Set CHEM_PDF_EXTRACTOR_API_KEY, pass --cloud-api-key, save config.local.json, "
+            "or stay local with --llm-provider ollama."
+        )
+    if is_placeholder_cloud_api_key(api_key):
+        return (
+            "Cloud API Key looks like a placeholder. Set CHEM_PDF_EXTRACTOR_API_KEY "
+            "or pass a real --cloud-api-key. To avoid cloud processing, use --llm-provider ollama."
+        )
+
+    base_url = str(config.get("cloud_base_url") or config.get("base_url") or "").strip()
+    if not base_url:
+        return (
+            "Cloud Base URL is required for --llm-provider cloud. "
+            "Set CHEM_PDF_EXTRACTOR_BASE_URL or pass --cloud-base-url."
+        )
+    base_url_error = validate_cloud_base_url_security(base_url)
+    if base_url_error:
+        return base_url_error
+
+    model = str(config.get("cloud_model") or config.get("model") or "").strip()
+    if not model:
+        return (
+            "Cloud model name is required. Set CHEM_PDF_EXTRACTOR_MODEL, pass --cloud-model, "
+            "or pass --model as a legacy cloud model alias. 云端模型名称不能为空。"
+        )
+    if model.lower() in PLACEHOLDER_CLOUD_MODELS:
+        return (
+            "Cloud model name looks like a placeholder. Set CHEM_PDF_EXTRACTOR_MODEL, "
+            "pass --cloud-model, or pass --model as a legacy cloud model alias. "
+            "请填写真实的云端模型名称。"
+        )
+
+    return None
+
+
+def is_placeholder_cloud_api_key(api_key: str) -> bool:
+    lowered = str(api_key or "").strip().lower()
+    compact = re.sub(r"[\s_]+", "_", lowered)
+    if compact in PLACEHOLDER_CLOUD_API_KEYS:
+        return True
+    dashed = re.sub(r"[\s_]+", "-", lowered)
+    if dashed in PLACEHOLDER_CLOUD_API_KEYS:
+        return True
+    return "your" in lowered and "key" in lowered
+
+
+def validate_cloud_test_config(config: dict[str, Any]) -> str | None:
+    api_key = str(config.get("cloud_api_key") or config.get("api_key") or "").strip()
+    if not api_key:
+        return "Please enter an LLM API key."
+    if is_placeholder_cloud_api_key(api_key):
+        return "Please enter a real LLM API key."
+
+    base_url = str(config.get("cloud_base_url") or config.get("base_url") or "").strip()
+    base_url_error = validate_cloud_base_url_security(base_url)
+    if base_url_error:
+        return base_url_error
+
+    model = str(config.get("cloud_model") or config.get("model") or "").strip()
+    if not model:
+        return "Please enter a model name."
+    if model.lower() in PLACEHOLDER_CLOUD_MODELS:
+        return "Please enter a real model name."
+    return None
+
+
+def short_error(exc: BaseException, limit: int = 500) -> str:
+    text = f"{type(exc).__name__}: {exc}"
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > limit:
+        text = text[: limit - 3] + "..."
+    return text
+
+
+def format_duration(seconds: float) -> str:
+    total = max(0, int(round(seconds)))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}小时{minutes}分{secs}秒"
+    if minutes:
+        return f"{minutes}分{secs}秒"
+    if seconds < 10:
+        return f"{seconds:.1f}秒"
+    return f"{secs}秒"
+
+
+def add_stat(stats: dict[str, float] | None, key: str, value: float = 1.0) -> None:
+    if stats is not None:
+        stats[key] = stats.get(key, 0.0) + value
+
+
+def eta_text(started_at: float, done: int, total: int) -> str:
+    import time as _time
+    if done <= 0 or total <= 0 or done >= total:
+        return "预计剩余 0秒"
+    elapsed = _time.perf_counter() - started_at
+    remaining = max(0, total - done)
+    eta = elapsed / done * remaining
+    return f"预计剩余 {format_duration(eta)}"
+
+
+def stage_summary(stats: dict[str, float]) -> str:
+    if not stats:
+        return ""
+    parts = []
+    mapping = [
+        ("pdf_to_md", "PDF转MD"),
+        ("llm_extraction", "LLM抽取"),
+        ("quality_retry", "二次抽取"),
+        ("translation", "翻译"),
+    ]
+    for key, label in mapping:
+        value = stats.get(key, 0.0)
+        if value:
+            parts.append(f"{label}{format_duration(value)}")
+    cache_hits = int(stats.get("extract_cache_hit", 0))
+    if cache_hits:
+        parts.append(f"抽取缓存命中{cache_hits}次")
+    return "；".join(parts)
+
+
+def infer_field_type(label: str, description: str) -> str:
+    text = f"{label} {description}".lower()
+    desc = description.strip().lower()
+    if desc.startswith("数字") or "只填" in text:
+        return "float"
+    return "str"
+
+
+def normalize_requirement(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    mapping = {
+        "必填": "required", "required": "required",
+        "建议": "recommended", "推荐": "recommended", "recommended": "recommended",
+        "选填": "optional", "可选": "optional", "optional": "optional",
+    }
+    return mapping.get(text, "optional")
+
+
+def requirement_label(value: str) -> str:
+    return {"required": "必填", "recommended": "建议", "optional": "选填"}.get(value, "选填")
+
+
+def requirement_rule(value: str) -> str:
+    if value == "required":
+        return "【必填】必须优先检索全文、表格、图注和补充材料中的相关信息，尽最大努力抽取；只有原文确实不存在或无法判断时才留空，严禁编造"
+    if value == "recommended":
+        return "【建议】尽量抽取；若原文没有明确给出或无法可靠判断，可以留空"
+    return "【选填】有明确证据时抽取；没有就留空"
+
+
+def normalize_fields(fields: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    source = fields or DEFAULT_FIELDS
+    normalized: list[dict[str, str]] = []
+    for item in source:
+        label = str(item.get("label", "")).strip()
+        if not label:
+            continue
+        description = str(item.get("description", "")).strip() or label
+        field_type = str(item.get("type") or infer_field_type(label, description)).strip().lower()
+        if field_type not in {"str", "float", "int"}:
+            field_type = infer_field_type(label, description)
+        requirement = normalize_requirement(item.get("requirement"))
+        normalized.append({
+            "label": label, "type": field_type,
+            "requirement": requirement, "description": description,
+        })
+    if not normalized:
+        first = DEFAULT_FIELDS[0]
+        description = str(first.get("description", "")).strip() or str(first.get("label", "字段")).strip()
+        normalized = [{
+            "label": str(first.get("label", "字段")).strip() or "字段",
+            "type": str(first.get("type") or infer_field_type(str(first.get("label", "")), description)),
+            "requirement": normalize_requirement(first.get("requirement")),
+            "description": description,
+        }]
+    used: dict[str, int] = {}
+    for item in normalized:
+        label = item["label"]
+        used[label] = used.get(label, 0) + 1
+        if used[label] > 1:
+            item["label"] = f"{label} ({used[label]})"
+    return normalized
+
+
+def append_review_aid_fields(fields: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Append manual-review aid fields without mutating user field definitions."""
+    normalized = normalize_fields(fields)
+    review_labels = set(REVIEW_AID_FIELD_LABELS)
+    by_label = {item["label"]: dict(item) for item in normalized}
+    result = [dict(item) for item in normalized if item["label"] not in review_labels]
+
+    for template in REVIEW_AID_FIELDS:
+        label = template["label"]
+        item = dict(by_label.get(label, template))
+        item["label"] = label
+        item["type"] = "str"
+        item["requirement"] = "optional"
+        if not str(item.get("description", "")).strip():
+            item["description"] = str(template["description"])
+        result.append({
+            "label": str(item["label"]),
+            "type": str(item["type"]),
+            "requirement": str(item["requirement"]),
+            "description": str(item["description"]),
+        })
+    return result
+
+
+def python_type(type_name: str) -> type:
+    return str
+
+
+def missing_rule(type_name: str) -> str:
+    if type_name in {"float", "int"}:
+        return "缺失时留空；若有数据，只输出纯数字"
+    return "缺失时留空，不要输出 N/A、null、-999 或自行编造内容"
+
+
+def field_instructions(fields: list[dict[str, str]]) -> str:
+    lines = []
+    for index, item in enumerate(fields, start=1):
+        requirement = item.get("requirement", "optional")
+        lines.append(
+            f"{index}. {item['label']} [{requirement_label(requirement)}]: "
+            f"{item['description']}；{requirement_rule(requirement)}；{missing_rule(item['type'])}"
+        )
+    return "\n".join(lines)
+
+
+def build_dynamic_model(fields: list[dict[str, str]], runtime: RuntimeDeps):
+    from pydantic import Field as _Field, create_model as _create_model
+    record_fields: dict[str, Any] = {}
+    key_to_label: dict[str, str] = {}
+    for index, item in enumerate(fields, start=1):
+        key = f"field_{index:02d}"
+        key_to_label[key] = item["label"]
+        desc = (
+            f"字段名：{item['label']}。"
+            f"字段要求：{requirement_rule(item.get('requirement', 'optional'))}。"
+            f"字段说明：{item['description']}。"
+            f"{missing_rule(item['type'])}。"
+            "中英文文献均可抽取，保留原文中最清楚的表达。"
+        )
+        record_fields[key] = (python_type(item["type"]), _Field(default="", description=desc))
+    record_model = _create_model("ExtractionRecord", **record_fields)
+    model = _create_model(
+        "ExtractionResult",
+        records=(
+            list[record_model],
+            _Field(
+                default_factory=list,
+                description=(
+                    "抽取到的数据记录列表。同一篇文献中如果有多个工艺、催化剂、实验条件、"
+                    "数据表行或可独立成行的结果，就拆成多条 records；只有一条时也放在列表中。"
+                ),
+            ),
+        ),
+    )
+    return model, key_to_label
+
+
+def bad_row_min_fill_rate_from_config(config: dict[str, Any]) -> float:
+    raw = config.get("bad_row_min_fill_percent", config.get("bad_row_min_fill_rate", BAD_ROW_MIN_FILL_RATE))
+    if raw is None or raw == "":
+        return BAD_ROW_MIN_FILL_RATE
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError):
+        return BAD_ROW_MIN_FILL_RATE
+    if numeric > 1:
+        numeric = numeric / 100.0
+    return max(0.0, min(1.0, numeric))
+
+
+def candidate_pythons() -> list[Path]:
+    candidates: list[Path] = []
+    bundled_python = PROJECT_ROOT / BUNDLED_RUNTIME_DIR_NAME / "python" / "python.exe"
+    candidates.append(bundled_python)
+    candidates.append(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe")
+    for runtime_dir_name in LEGACY_BUNDLED_RUNTIME_DIR_NAMES:
+        candidates.append(PROJECT_ROOT / runtime_dir_name / "python" / "python.exe")
+    env_python = os.environ.get("CHEM_PDF_EXTRACTOR_PYTHON") or os.environ.get("CHEM_EXTRACTOR_PYTHON")
+    if env_python:
+        candidates.append(Path(env_python))
+    current = Path(sys.executable).resolve()
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate
+        key = str(resolved).casefold()
+        if key == str(current).casefold() or key in seen:
+            continue
+        seen.add(key)
+        unique.append(resolved)
+    return unique
+
+
+def python_has_required_packages(python_exe: Path) -> bool:
+    if not python_exe.exists():
+        return False
+    code = "import " + ", ".join(CORE_REQUIRED_PACKAGES.keys())
+    result = subprocess.run(
+        [str(python_exe), "-c", code],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+    )
+    return result.returncode == 0
+
+
+def try_reexec_with_ready_python() -> None:
+    if os.environ.get("CHEM_EXTRACTOR_REEXECED") == "1":
+        return
+    for python_exe in candidate_pythons():
+        if python_has_required_packages(python_exe):
+            print(f"当前 Python 缺依赖：{sys.executable}")
+            print(f"找到已安装依赖的 Python：{python_exe}")
+            print("正在自动切换并重启脚本...")
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os.environ["CHEM_EXTRACTOR_REEXECED"] = "1"
+            wrapper = PROJECT_ROOT / "run_senolytics.py"
+            os.execv(str(python_exe), [str(python_exe), str(wrapper), *sys.argv[1:]])
+
+
+def clean_pip_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for key in [
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "all_proxy",
+        "PIP_PROXY", "pip_proxy",
+    ]:
+        env.pop(key, None)
+    return env
+
+
+def find_missing_imports() -> list[str]:
+    missing: list[str] = []
+    for import_name, package_name in CORE_REQUIRED_PACKAGES.items():
+        try:
+            importlib.import_module(import_name)
+        except ModuleNotFoundError:
+            missing.append(package_name)
+    return sorted(set(missing))
+
+
+def run_pip_install(packages: list[str]) -> bool:
+    commands = [
+        [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", *packages],
+        [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+         "-i", "https://pypi.tuna.tsinghua.edu.cn/simple",
+         "--trusted-host", "pypi.tuna.tsinghua.edu.cn", *packages],
+        [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+         "-i", "https://mirrors.aliyun.com/pypi/simple/",
+         "--trusted-host", "mirrors.aliyun.com", *packages],
+    ]
+    for command in commands:
+        print("\n正在尝试安装依赖：")
+        print(" ".join(command))
+        result = subprocess.run(command, check=False, env=clean_pip_env())
+        if result.returncode == 0:
+            return True
+    return False
+
+
+def ensure_dependencies(auto_install: bool = True) -> None:
+    missing = find_missing_imports()
+    if not missing:
+        return
+    print("当前 Python 缺少依赖：", ", ".join(missing))
+    try_reexec_with_ready_python()
+    if auto_install:
+        installed = run_pip_install(missing)
+        if installed and not find_missing_imports():
+            print("依赖安装完成，继续执行。")
+            return
+    mirror_command = (
+        f'"{sys.executable}" -m pip install '
+        "-i https://pypi.tuna.tsinghua.edu.cn/simple "
+        "--trusted-host pypi.tuna.tsinghua.edu.cn "
+        + " ".join(missing)
+    )
+    raise SystemExit(
+        "\n依赖没有安装成功，脚本无法继续。\n"
+        "你可以手动复制下面这条命令到 PowerShell 执行：\n"
+        f"{mirror_command}\n"
+    )
+
+
+def import_runtime_dependencies() -> RuntimeDeps:
+    import pandas as pd
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_ollama import ChatOllama
+    from pydantic import Field, create_model
+    from pypdf import PdfReader
+    return RuntimeDeps(
+        pd=pd, PdfReader=PdfReader,
+        ChatPromptTemplate=ChatPromptTemplate, ChatOllama=ChatOllama,
+        Field=Field, create_model=create_model,
+    )
+
+
+def _optional_backend_error(name: str, exc: BaseException) -> RuntimeError:
+    reason = short_error(exc, limit=300)
+    package = OPTIONAL_PDF_BACKEND_PACKAGES.get(name, name)
+    return RuntimeError(
+        f"{name} PDF 后端当前不可用。该依赖已改为可选懒加载，"
+        f"请切换到 pypdf_text，或安装/修复 {package} 后重试。原因：{reason}"
+    )
+
+
+def load_pymupdf4llm(runtime: RuntimeDeps) -> Any:
+    if runtime.pymupdf4llm is not None:
+        return runtime.pymupdf4llm
+    try:
+        runtime.pymupdf4llm = importlib.import_module("pymupdf4llm")
+        return runtime.pymupdf4llm
+    except Exception as exc:
+        raise _optional_backend_error("pymupdf4llm", exc) from exc
+
+
+def load_pymupdf(runtime: RuntimeDeps) -> Any:
+    if runtime.pymupdf is not None:
+        return runtime.pymupdf
+    try:
+        runtime.pymupdf = importlib.import_module("pymupdf")
+        return runtime.pymupdf
+    except Exception as exc:
+        raise _optional_backend_error("pymupdf", exc) from exc
