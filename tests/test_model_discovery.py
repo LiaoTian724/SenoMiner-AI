@@ -41,7 +41,7 @@ class ModelDiscoveryTest(unittest.TestCase):
     def test_fetch_models_parses_openai_compatible_response(self):
         requests = []
 
-        def fake_urlopen(request, timeout=0):
+        def fake_urlopen(request, timeout=0, **kwargs):
             requests.append((request.full_url, request.get_header("Authorization"), timeout))
             return FakeResponse({"data": [{"id": "model-a"}, {"id": "model-b"}]})
 
@@ -54,7 +54,7 @@ class ModelDiscoveryTest(unittest.TestCase):
         self.assertEqual(requests[0][2], 3)
 
     def test_fetch_models_deduplicates_ids(self):
-        def fake_urlopen(request, timeout=0):
+        def fake_urlopen(request, timeout=0, **kwargs):
             return FakeResponse({"data": [{"id": "model-a"}, {"id": "model-a"}, {"id": "model-b"}]})
 
         with patch("chem_pdf_extractor.llm.urllib.request.urlopen", fake_urlopen):
@@ -63,7 +63,7 @@ class ModelDiscoveryTest(unittest.TestCase):
         self.assertEqual(models, ["model-a", "model-b"])
 
     def test_fetch_models_rejects_invalid_response(self):
-        def fake_urlopen(request, timeout=0):
+        def fake_urlopen(request, timeout=0, **kwargs):
             return FakeResponse({"models": []})
 
         with patch("chem_pdf_extractor.llm.urllib.request.urlopen", fake_urlopen):
@@ -73,7 +73,7 @@ class ModelDiscoveryTest(unittest.TestCase):
     def test_fetch_models_error_does_not_include_api_key(self):
         secret = "SECRET_TEST_KEY"
 
-        def fake_urlopen(request, timeout=0):
+        def fake_urlopen(request, timeout=0, **kwargs):
             raise urllib.error.URLError(f"network failure {secret}")
 
         with patch("chem_pdf_extractor.llm.urllib.request.urlopen", fake_urlopen):

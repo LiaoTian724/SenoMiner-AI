@@ -9,6 +9,33 @@ from .pdf import read_pdf_as_markdown_with_mode
 from .science_skills import SkillError
 
 
+def normalize_identifier(value: str) -> str:
+    """Only literature identifiers, never arbitrary URLs or local paths."""
+    identifier = str(value or "").strip()
+    if re.fullmatch(r"(?:PMID:)?\s*\d{1,10}", identifier, re.I):
+        return "PMID:" + re.sub(r"\D", "", identifier)
+    if re.fullmatch(r"(?:PMC:)?\s*PMC\d{1,10}", identifier, re.I):
+        return re.search(r"PMC\d+", identifier, re.I).group().upper()
+    doi = re.sub(r"^(?:doi:\s*|https?://(?:dx\.)?doi.org/)", "", identifier, flags=re.I)
+    if len(doi) <= 250 and re.fullmatch(r"10\.\d{4,9}/[^\s\"\[\]<>]+", doi):
+        return "DOI:" + doi
+    raise ValueError("请输入有效的 DOI、PMID 或 PMC 编号；其他文献请上传 PDF。")
+
+
+def resolve_pubmed_identifier(value: str, skills: Any) -> str:
+    identifier = normalize_identifier(value)
+    if identifier.startswith("PMID:"):
+        return identifier[5:]
+    if identifier.startswith("PMC"):
+        ids = skills.call("pubmed", "find_linked_biological_data", identifier[3:], "pubmed", "pmc_pubmed", "--dbfrom", "pmc")
+    else:
+        ids = skills.call("pubmed", "search_pubmed", f'"{identifier[4:]}"[AID]', "--max_results", "2")
+    ids = [str(v) for v in ids if re.fullmatch(r"\d{1,10}", str(v))]
+    if len(ids) != 1:
+        raise ValueError("No unique PubMed record matches this identifier；未找到唯一对应文献，请上传 PDF。")
+    return ids[0]
+
+
 def load_paper(value: str, skills: Any, runtime: Any, pdf_mode: str = "pymupdf4llm") -> dict:
     path = Path(value).expanduser()
     if path.is_file():
@@ -21,24 +48,7 @@ def load_paper(value: str, skills: Any, runtime: Any, pdf_mode: str = "pymupdf4l
         if not text.strip():
             raise ValueError("No extractable text; provide OCR text for scanned PDFs")
         return {"source": path.name, "text": text, "scope": "local_document", "parser": parser}
-    identifier = value.strip()
-    pmid = ""
-    if re.fullmatch(r"(?:PMID:)?\s*\d+", identifier, re.I):
-        pmid = re.sub(r"\D", "", identifier)
-    elif re.fullmatch(r"(?:PMC:)?\s*PMC\d+", identifier, re.I):
-        pmcid = re.search(r"PMC\d+", identifier, re.I).group().upper()
-        ids = skills.call("pubmed", "find_linked_biological_data", pmcid[3:], "pubmed", "pmc_pubmed", "--dbfrom", "pmc")
-        if len(ids) == 1:
-            pmid = str(ids[0])
-    else:
-        doi = re.sub(r"^(?:doi:|https?://doi.org/)", "", identifier, flags=re.I).strip()
-        if not re.fullmatch(r"10\.\d{4,9}/[^\s\"\[\]]+", doi):
-            raise ValueError("Input must be a file, PMID, PMC ID, or DOI")
-        ids = skills.call("pubmed", "search_pubmed", f'"{doi}"[AID]', "--max_results", "2")
-        if len(ids) == 1:
-            pmid = str(ids[0])
-    if not pmid.isdigit():
-        raise ValueError("No unique PubMed record matches this identifier")
+    pmid = resolve_pubmed_identifier(value, skills)
     papers = skills.call("pubmed", "fetch_article_abstracts", pmid)
     if not papers or not papers[0].get("title"):
         raise ValueError("PubMed record has no article metadata")

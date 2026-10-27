@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -24,6 +25,7 @@ from .config import (
     validate_cloud_base_url_security,
 )
 from .biology import BIOLOGY_RULES
+from .network import tls_context
 from .security import redact_sensitive_text
 from .text_safety import json_dumps_utf8
 
@@ -300,6 +302,7 @@ def cloud_chat_completion(
     messages: list[dict[str, str]], llm_timeout: int,
     response_dir: Path | None = None,
     retry_count: int | None = None,
+    on_retry: Any = None,
 ) -> str:
     base_url_error = validate_cloud_base_url_security(base_url)
     if base_url_error:
@@ -329,9 +332,9 @@ def cloud_chat_completion(
         )
         try:
             if llm_timeout and llm_timeout > 0:
-                response_ctx = urllib.request.urlopen(request, timeout=llm_timeout)
+                response_ctx = urllib.request.urlopen(request, timeout=llm_timeout, context=tls_context())
             else:
-                response_ctx = urllib.request.urlopen(request)
+                response_ctx = urllib.request.urlopen(request, context=tls_context())
             with response_ctx as response:
                 payload = json.loads(response.read().decode("utf-8", errors="replace"))
             if response_dir is not None:
@@ -360,14 +363,19 @@ def cloud_chat_completion(
                 suffix = f" ({error_code})" if re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", error_code) else ""
                 raise RuntimeError(f"Cloud API HTTP {exc.code}{suffix}. Check cloud API configuration or request settings.") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            reason = getattr(exc, "reason", exc)
+            if isinstance(reason, ssl.SSLCertVerificationError):
+                raise RuntimeError("HTTPS 证书校验失败；请检查虚拟环境的 CA 证书路径或 SSL_CERT_FILE 配置。") from exc
             last_exc = exc
             if attempt >= attempts - 1:
                 raise TransientCloudAPIError(
-                    "Cloud API/network temporarily unavailable after retries."
+                    "云端连接超时或网络不可用，自动重试后仍失败；已完成的分段已缓存，可重试继续。"
                 ) from exc
         except (json.JSONDecodeError, KeyError) as exc:
             raise RuntimeError(f"Cloud API returned malformed response: {redact_sensitive_text(short_error(exc))}") from exc
         delay = min(CLOUD_RETRY_MAX_DELAY_SECONDS, CLOUD_RETRY_BASE_DELAY_SECONDS * (2**attempt))
+        if on_retry:
+            on_retry(f"云端暂未返回有效响应，{delay:g} 秒后重试（第 {attempt+2}/{attempts} 次请求）")
         time.sleep(delay)
     raise TransientCloudAPIError("Cloud API/network temporarily unavailable after retries.") from last_exc
 
@@ -391,7 +399,7 @@ def test_openai_compatible_chat(base_url: str, api_key: str, model: str, timeout
         "max_tokens": 40,
         "response_format": {"type": "json_object"},
     }
-    if model.startswith("doubao-seed-2-1-"):
+    if model.startswith("doubao-seed-2-1-") or model == "doubao-seed-evolving":
         body["reasoning_effort"] = os.getenv("ARK_REASONING_EFFORT", "minimal")
     request = urllib.request.Request(
         str(base_url).strip().rstrip("/") + "/chat/completions",
@@ -404,7 +412,7 @@ def test_openai_compatible_chat(base_url: str, api_key: str, model: str, timeout
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=tls_context()) as response:
             payload = json.loads(response.read().decode("utf-8", errors="replace"))
         content = payload["choices"][0]["message"]["content"]
         parsed = extract_json_object(message_content(content))
@@ -491,7 +499,7 @@ def fetch_openai_compatible_models(base_url: str, api_key: str, timeout: float =
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=tls_context()) as response:
             payload = json.loads(response.read().decode("utf-8", errors="replace"))
         return parse_openai_compatible_model_ids(payload)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError) as exc:
@@ -539,10 +547,11 @@ def extract_with_cloud_api(
         },
     ]
     args = (base_url, api_key, model, messages, int(config.get("llm_timeout") or 0))
+    kwargs = {}
     if config.get("response_dir"):
-        content = cloud_chat_completion(*args, response_dir=Path(config["response_dir"]),
-                                        retry_count=config.get("cloud_retry_count"))
-    else:
-        content = cloud_chat_completion(*args)
+        kwargs.update(response_dir=Path(config["response_dir"]), retry_count=config.get("cloud_retry_count"))
+    if config.get("log"):
+        kwargs["on_retry"] = config["log"]
+    content = cloud_chat_completion(*args, **kwargs)
     raw = parse_cloud_extraction_payload(content)
     return labeled_rows(raw, fields, key_to_label)

@@ -8,6 +8,7 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -53,23 +54,28 @@ def extract_article(paper: dict, supplements: list[dict], config: dict,
     rows = []
     chunks = list(text_chunks(source, config.get("chunk_size", 8000)))
     log = config.get("log")
+    progress = config.get("progress") or (lambda *args, **kwargs: None)
+    completed, cached = 0, 0
+    progress_lock = threading.Lock()
+    progress("extracting", message="正在分段读取全文", completed=0, total=len(chunks))
     checkpoint_dir = output_dir / "extraction_cache"
     checkpoint_dir.mkdir(exist_ok=True)
     def call_cloud_chunk(chunk):
         try:
             return extract_with_cloud_api(Path(paper["source"]),
-                {**config, "response_dir": str(output_dir / "model_responses"), "cloud_retry_count": 1}, fields, mapping, chunk)
-        except (CloudStructuredOutputError, TransientCloudAPIError):
+                {**config, "response_dir": str(output_dir / "model_responses"), "cloud_retry_count": 2}, fields, mapping, chunk)
+        except CloudStructuredOutputError:
             if len(chunk) <= 2500:
                 raise
             if log:
-                log(f"Splitting {len(chunk)}-character chunk after failed, invalid or truncated output")
+                log(f"模型返回格式不完整，拆分 {len(chunk)} 字符片段后重试")
             middle = len(chunk) // 2
             return call_cloud_chunk(chunk[:middle+200]) + call_cloud_chunk(chunk[middle-200:])
     def extract_one_chunk(pair):
+        nonlocal completed, cached
         chunk_index, chunk = pair
         if log:
-            log(f"Extracting chunk {chunk_index}/{len(chunks)} ({len(chunk)} characters)")
+            log(f"正在请求分段 {chunk_index}/{len(chunks)}（{len(chunk)} 字符）")
         checkpoint_key = hashlib.sha256(json.dumps({
             "text": chunk, "fields": fields, "rules": BIOLOGY_RULES,
             "provider": config.get("llm_provider", "cloud"),
@@ -84,9 +90,10 @@ def extract_article(paper: dict, supplements: list[dict], config: dict,
                 if isinstance(saved, list) and all(isinstance(row, dict) for row in saved):
                     records = saved
                     if log:
-                        log(f"Reused cached extraction chunk {chunk_index}")
+                        log(f"复用已完成分段 {chunk_index}")
             except (OSError, ValueError):
                 pass
+        used_cache = records is not None
         if records is None and chain is None:
             records = call_cloud_chunk(chunk)
         elif records is None:
@@ -99,7 +106,11 @@ def extract_article(paper: dict, supplements: list[dict], config: dict,
             json.dump(records, handle, ensure_ascii=False)
         Path(pending_name).replace(checkpoint)
         if log:
-            log(f"Chunk {chunk_index}: {len(records)} candidate experiment records")
+            log(f"分段 {chunk_index}/{len(chunks)} 完成：{len(records)} 条原始候选记录")
+        with progress_lock:
+            completed += 1
+            cached += int(used_cache)
+            progress("extracting", message=f"已完成 {completed}/{len(chunks)} 段（复用 {cached} 段）", completed=completed, total=len(chunks))
         return records
 
     workers = 1 if chain is not None else max(1, min(4, int(config.get("workers", 3))))
@@ -122,13 +133,17 @@ def extract_article(paper: dict, supplements: list[dict], config: dict,
         if old is None or old["needs_review"] and not row["needs_review"]:
             unique[row["experiment_id"]] = row
     rows = list(unique.values())
+    progress("reviewing", message="核对全文中的药物角色与作用方向")
     review = review_rows(rows, source, config, output_dir)
+    progress("linking", message="关联原文依据、实验流程与结果")
     extract_cards(rows, source, review, config, output_dir)
+    progress("enriching", message="查询分子身份与数据库资料")
     rows = enrich_rows(rows, output_dir / "database_cache", skills=skills,
                        enabled=config.get("enrich_databases", True),
                        literature_limit=config.get("literature_limit", 5), log=log, approved=approved_records(review))
     if config.get("enrich_databases", True):
         populate_identities(review, rows, output_dir, skills)
+    progress("saving", message="保存报告并更新化合物列表")
     write_jsonl(output_dir / "experiments.jsonl", rows)
     (output_dir / "report.json").write_text(json.dumps({
         "source": {k: v for k, v in paper.items() if k != "text"},

@@ -49,6 +49,45 @@ def source_span_fixture(source, quote):
 
 
 class CatalogTest(unittest.TestCase):
+    def test_drug_class_is_not_a_compound_but_specific_names_without_cid_remain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);folder=root/'output'/'paper';folder.mkdir(parents=True)
+            source='17-DMAG selectively killed senescent cells. HSP90 inhibitors selectively killed senescent cells.'
+            rows=[{'compound_name':name,'experiment_id':name,'observed_result':quote}
+                  for name,quote in [('17-DMAG','17-DMAG selectively killed senescent cells.'),
+                                     ('HSP90 inhibitors','HSP90 inhibitors selectively killed senescent cells.')]]
+            (folder/'report.json').write_text(json.dumps({'source':{'source':'paper.pdf'},'records':rows}))
+            approve_fixture(folder,rows,source)
+            names=[c['name'] for c in build_catalog(root)['compounds']]
+            self.assertEqual(names,['17-DMAG'])
+            self.assertEqual(len(json.loads((folder/'report.json').read_text())['records']),2)
+
+    def test_pct_reading_steps_require_same_paper_cohort_and_source_facts(self):
+        quote = 'PCT selectively targets the senescent population for elimination'
+        source = '\n'.join([
+            quote,
+            'Cells were exposed to 1 µM 5FU for 5 consecutive days. After 24 h of recovery in drug-free medium, cells were treated with 20 µM PCT for an additional 48 h.',
+            'Annexin V staining revealed a significant increase in early apoptosis in CCD and HCT116 cells that had been rendered senescent by 5FU',
+            'CCK8 viability assay shows that PCT significantly reduces viability in 5FU-primed CCD18Co and HCT116 cells',
+            'In contrast, non-senescent populations and HT29 cells, which do not strongly undergo senescence, were minimally affected',
+            'Immunocytochemical co-staining with SA-β -galactosidase confirmed that apoptotic cells were predominantly senescent',
+        ])
+        for doi, kind, text, expected in [
+            ('10.3390/ijms26189134', 'in_vitro', source, True),
+            ('10.3390/ijms26189134', 'in_vitro', source.replace('24 h', '48 h'), False),
+            ('10.3390/other', 'in_vitro', source, False),
+            ('10.3390/ijms26189134', 'in_vivo', source, False),
+        ]:
+            with self.subTest(doi=doi, kind=kind, source=text):
+                paper = {'doi': doi, 'groups': [{'id': 'pct-cell', 'study_type': kind,
+                    'outcomes': [{'quote': quote, 'result': quote}], 'steps': []}]}
+                attach_evidence_stories(paper, 'Piceatannol', text)
+                self.assertEqual(bool(paper['lead_claim'].get('reading_steps')), expected)
+                if expected:
+                    self.assertIn('24 小时', paper['lead_claim']['reading_steps'][2])
+                    self.assertIn('诱导细胞衰老', paper['lead_claim']['reading_steps'][1])
+                    self.assertIn('Piceatannol', paper['lead_claim']['reading_steps'][3])
+
     def test_story_leads_with_verified_claim_and_one_cohort(self):
         quote = "D + Q significantly reduced (p = 0·001) adipose tissue p16 [INK4A+] cells. Raw values were reduced by 35%"
         source = "# Results\n" + quote + " (Fig. 1a)."

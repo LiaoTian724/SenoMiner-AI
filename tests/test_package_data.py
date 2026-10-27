@@ -31,26 +31,27 @@ class PackageDataTest(unittest.TestCase):
         self.assertRegex(
             content,
             re.compile(
-                r'^chem_pdf_extractor\s*=\s*\["templates/index\.html", "templates/showcase\.html", "templates/catalog\.html", "static/catalog\.css", "static/catalog\.js", "static/3Dmol-min\.js", "static/3Dmol-LICENSE\.txt"\]$',
+                r'^chem_pdf_extractor\s*=\s*\["templates/catalog\.html", "static/catalog\.css", "static/catalog\.js", "static/3Dmol-min\.js", "static/3Dmol-LICENSE\.txt"\]$',
                 re.MULTILINE,
             ),
         )
 
     def test_template_file_resolves_from_package_resources(self):
-        template = resources.files("chem_pdf_extractor").joinpath("templates", "index.html")
+        template = resources.files("chem_pdf_extractor").joinpath("templates", "catalog.html")
 
         content = template.read_text(encoding="utf-8")
 
         self.assertIn("<!doctype html>", content.lower())
-        self.assertIn("Chem-PDF-Extractor", content)
+        self.assertIn("SenoMiner-AI", content)
 
     def test_server_import_and_template_load_succeeds(self):
-        from chem_pdf_extractor.server import load_html_template
+        from chem_pdf_extractor.server import render_catalog_html
 
-        content = load_html_template()
+        content = render_catalog_html("test-local-token")
 
-        self.assertIn("Chem-PDF-Extractor", content)
-        self.assertIn("__DEFAULT_FIELDS_JSON__", content)
+        self.assertIn("SenoMiner-AI", content)
+        self.assertIn("test-local-token", content)
+        self.assertNotIn("__LOCAL_TOKEN__", content)
 
     def test_python_module_entrypoint_still_supports_help(self):
         with tempfile.TemporaryDirectory() as tmp:

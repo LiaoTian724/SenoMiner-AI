@@ -1,6 +1,8 @@
 """PubChem conformers with an explicitly labelled local RDKit fallback."""
 from __future__ import annotations
 
+from .network import tls_context
+
 import hashlib
 import json
 import math
@@ -26,7 +28,7 @@ def _valid_3d(sdf: str) -> bool:
 def _fetch(cid: str, dimension: str) -> str:
     url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/SDF?record_type={dimension}"
     request = urllib.request.Request(url, headers={"User-Agent": "SenolyticsKnowledge/0.4.0 (research; PUG REST)"})
-    with urllib.request.urlopen(request, timeout=15) as response:
+    with urllib.request.urlopen(request, timeout=15, context=tls_context()) as response:
         data = response.read(1_000_001)
     if len(data) > 1_000_000 or b"V2000" not in data and b"V3000" not in data:
         raise ValueError("PubChem 返回的结构文件无效")

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html as html_lib
 import json
 import os
 import secrets
@@ -13,10 +12,9 @@ from typing import Any
 import webbrowser
 
 from .config import (
+    PROJECT_ROOT,
     DEFAULT_CLOUD_BASE_URL,
     DEFAULT_CLOUD_MODEL,
-    DEFAULT_CLOUD_MODEL_SUGGESTIONS,
-    DEFAULT_CLOUD_SERVICE_NAME,
     DEFAULT_MAX_CHARS,
     DEFAULT_MODEL,
     DEFAULT_NUM_CTX,
@@ -41,25 +39,16 @@ from .extractor import JobState, run_extraction_job, state_update
 from .llm import choose_model, fetch_openai_compatible_models, get_ollama_models, test_openai_compatible_chat
 from .security import redact_sensitive_text
 from .text_safety import json_dumps_utf8
-from . import showcase, catalog
+from . import catalog
+from .catalog_progress import CatalogProgress
+from .sources import normalize_identifier
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 
-def load_html_template() -> str:
-    return (TEMPLATES_DIR / "index.html").read_text(encoding="utf-8")
-
-
-def render_html(defaults: dict[str, Any], default_fields: list[dict[str, Any]]) -> str:
-    html = load_html_template()
-    html = html.replace("__DEFAULT_FIELDS_JSON__", json_dumps_utf8(default_fields))
-    html = html.replace("__DEFAULT_CONFIG_JSON__", json_dumps_utf8(defaults))
-    model_options = "\n".join(
-        f'                <option value="{html_lib.escape(model)}">{html_lib.escape(model)}</option>'
-        for model in DEFAULT_CLOUD_MODEL_SUGGESTIONS
-    )
-    html = html.replace("__DEFAULT_CLOUD_MODEL_OPTIONS__", model_options)
-    return html
+def render_catalog_html(token: str) -> str:
+    return (TEMPLATES_DIR / "catalog.html").read_text(encoding="utf-8").replace(
+        "__LOCAL_TOKEN__", json_dumps_utf8(token))
 
 
 def allowed_ui_origins(port: int) -> set[str]:
@@ -157,35 +146,14 @@ class ChemExtractorApp:
         self.server: ThreadingHTTPServer | None = None
         self.ui_token = secrets.token_urlsafe(32)
         self.port = 0
-        self.showcase_lock = threading.Lock()
-        self.showcase_running = False
-        self.showcase_message = ""
-        self.showcase_error = ""
-        self.catalog_running = False
-        self.catalog_message = ""
-        self.catalog_error = ""
-        self.catalog_lock = threading.Lock()
+        self.catalog_task = CatalogProgress()
 
     def catalog_status(self) -> dict[str, Any]:
-        with self.catalog_lock:
-            return {"running": self.catalog_running, "message": self.catalog_message,
-                    "error": self.catalog_error}
+        return self.catalog_task.snapshot()
 
     def catalog_log(self, message: str) -> None:
-        with self.catalog_lock:
-            self.catalog_message = redact_sensitive_text(str(message))
+        self.catalog_task.log(message)
 
-    def showcase_status(self) -> dict[str, Any]:
-        with self.showcase_lock:
-            return {
-                "running": self.showcase_running,
-                "message": self.showcase_message,
-                "error": self.showcase_error,
-            }
-
-    def showcase_log(self, message: str) -> None:
-        with self.showcase_lock:
-            self.showcase_message = redact_sensitive_text(str(message))
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -235,8 +203,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/catalog":
-            data = (TEMPLATES_DIR / "catalog.html").read_text(encoding="utf-8")
-            data = data.replace("__LOCAL_TOKEN__", json_dumps_utf8(self.app.ui_token)).encode("utf-8")
+            data = render_catalog_html(self.app.ui_token).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
@@ -253,59 +220,17 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if parsed.path == "/showcase":
-            data = showcase.render_page(self.app.ui_token).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_common_security_headers(html=True)
+        if parsed.path in {"/", "/showcase"}:
+            # Old bookmarks go to the single input/progress/results page.
+            self.send_response(303)
+            self.send_header("Location", "/catalog")
+            self.send_header("Content-Length", "0")
+            self.send_common_security_headers()
             self.end_headers()
-            self.wfile.write(data)
-            return
-        if parsed.path == "/":
-            local_config = load_local_config()
-            public_config = public_local_config()
-            defaults = {
-                "input_dir": str(default_input_dir()),
-                "output_path": str(default_output_path()),
-                "llm_provider": "cloud",
-                "model": DEFAULT_MODEL,
-                "ollama_base_url": DEFAULT_OLLAMA_BASE_URL,
-                "cloud_service_name": local_config.get("cloud_service_name") or DEFAULT_CLOUD_SERVICE_NAME,
-                "cloud_model": local_config.get("cloud_model") or os.environ.get("CHEM_PDF_EXTRACTOR_MODEL") or DEFAULT_CLOUD_MODEL,
-                "cloud_model_suggestions": DEFAULT_CLOUD_MODEL_SUGGESTIONS,
-                "cloud_api_key": "",
-                "has_environment_cloud_api_key": bool(os.environ.get("CHEM_PDF_EXTRACTOR_API_KEY")),
-                "environment_cloud_base_url": os.environ.get("CHEM_PDF_EXTRACTOR_BASE_URL") or "",
-                "cloud_base_url": local_config.get("cloud_base_url") or os.environ.get("CHEM_PDF_EXTRACTOR_BASE_URL") or DEFAULT_CLOUD_BASE_URL,
-                "cloud_active": local_config.get("cloud_active", False),
-                "active_cloud_profile_id": public_config.get("active_cloud_profile_id") or "",
-                "cloud_profiles": public_config.get("cloud_profiles", []),
-                "copy_failed_sources": local_config.get("copy_failed_sources", False),
-                "ui_token": self.app.ui_token,
-                "recursive": True,
-                "max_chars": DEFAULT_MAX_CHARS,
-                "num_ctx": DEFAULT_NUM_CTX,
-                "pdf_mode": self.app.default_pdf_mode,
-                "bad_row_min_fill_percent": int(BAD_ROW_MIN_FILL_RATE * 100),
-            }
-            from .config import DEFAULT_FIELDS
-            html = render_html(defaults, DEFAULT_FIELDS)
-            data = html.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_common_security_headers(html=True)
-            self.end_headers()
-            self.wfile.write(data)
             return
 
         if parsed.path.startswith("/api/") and not self.protected_api_request_is_valid():
             self.reject_forbidden()
-            return
-
-        if parsed.path == "/api/showcase":
-            self.send_json({**showcase.snapshot(), **self.app.showcase_status()})
             return
 
         if parsed.path == "/api/catalog":
@@ -326,24 +251,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, **catalog.structure_details(cid)})
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, status=404)
-            return
-
-        if parsed.path == "/api/showcase/file":
-            kind = urllib.parse.parse_qs(parsed.query).get("kind", [""])[0]
-            item = showcase.downloadable_file(kind)
-            if item is None or not item[0].is_file():
-                self.send_json({"ok": False, "error": "file unavailable"}, status=404)
-                return
-            path, content_type, filename = item
-            self.send_response(200)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(path.stat().st_size))
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-            self.send_common_security_headers()
-            self.end_headers()
-            with path.open("rb") as stream:
-                while block := stream.read(65536):
-                    self.wfile.write(block)
             return
 
         if parsed.path == "/api/status":
@@ -380,22 +287,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/catalog/import":
             try:
-                pmid = str(self.read_json().get("pmid") or "")
-            except (ValueError, TypeError):
-                self.send_json({"ok": False, "error": "无效请求"}, status=400)
+                payload = self.read_json()
+                identifier = normalize_identifier(str(payload.get("identifier") or payload.get("pmid") or ""))
+            except (ValueError, TypeError, AttributeError) as exc:
+                self.send_json({"ok": False, "error": str(exc) if isinstance(exc, ValueError) else "无效请求"}, status=400)
                 return
-            if not pmid.isdigit() or len(pmid) > 10:
-                self.send_json({"ok": False, "error": "无效 PMID"}, status=400)
+            if not self.app.catalog_task.start(identifier, "identifier"):
+                self.send_json({"ok": False, "error": "已有文献正在处理，请查看提取进展"}, status=409)
                 return
-            with self.app.catalog_lock:
-                if self.app.catalog_running:
-                    self.send_json({"ok": False, "error": "已有文献正在处理"}, status=409)
-                    return
-                self.app.catalog_running = True
-                self.app.catalog_message = f"正在读取 PMID {pmid} 的公开全文"
-                self.app.catalog_error = ""
-            threading.Thread(target=_run_catalog_import, args=(self.app, pmid), daemon=True).start()
-            self.send_json({"ok": True})
+            threading.Thread(target=_run_catalog_import, args=(self.app, identifier), daemon=True).start()
+            self.send_json({"ok": True, **self.app.catalog_status()})
             return
         if parsed.path == "/api/catalog/process-pdf":
             try:
@@ -404,19 +305,15 @@ class RequestHandler(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 self.send_json({"ok": False, "error": "无效 PDF 文件名"}, status=400)
                 return
-            pdf = showcase.PROJECT_ROOT / "input_pdfs" / name
+            pdf = PROJECT_ROOT / "input_pdfs" / name
             if not pdf.is_file():
                 self.send_json({"ok": False, "error": "PDF 不在 input_pdfs 目录中"}, status=404)
                 return
-            with self.app.catalog_lock:
-                if self.app.catalog_running:
-                    self.send_json({"ok": False, "error": "已有文献正在处理"}, status=409)
-                    return
-                self.app.catalog_running = True
-                self.app.catalog_message = f"正在读取 {name}"
-                self.app.catalog_error = ""
+            if not self.app.catalog_task.start(name, "pdf"):
+                self.send_json({"ok": False, "error": "已有文献正在处理，请查看提取进展"}, status=409)
+                return
             threading.Thread(target=_run_catalog_pdf, args=(self.app, pdf, output), daemon=True).start()
-            self.send_json({"ok": True})
+            self.send_json({"ok": True, **self.app.catalog_status()})
             return
         if parsed.path == "/api/catalog/upload-pdf":
             name = urllib.parse.parse_qs(parsed.query).get("name", [""])[0]
@@ -428,7 +325,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 payload = self.rfile.read(length)
                 if len(payload) != length or not payload.startswith(b"%PDF-"):
                     raise ValueError("文件不是有效的 PDF")
-                directory = showcase.PROJECT_ROOT / "input_pdfs"
+                directory = PROJECT_ROOT / "input_pdfs"
                 directory.mkdir(exist_ok=True)
                 with (directory / name).open("xb") as stream:
                     stream.write(payload)
@@ -437,29 +334,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "同名 PDF 已存在；请先在目录中查看"}, status=409)
             except (ValueError, OSError) as exc:
                 self.send_json({"ok": False, "error": redact_sensitive_text(str(exc))}, status=400)
-            return
-        if parsed.path == "/api/showcase/start":
-            with self.app.showcase_lock:
-                already_running = self.app.showcase_running
-                if not already_running:
-                    self.app.showcase_running = True
-                    self.app.showcase_message = "准备解析单篇论文"
-                    self.app.showcase_error = ""
-            if already_running:
-                self.send_json({"ok": False, "error": "演示正在运行"}, status=409)
-                return
-            if showcase.snapshot()["ready"]:
-                with self.app.showcase_lock:
-                    self.app.showcase_running = False
-                self.send_json({"ok": True, "already_complete": True})
-                return
-            if not showcase.paper_path().is_file():
-                with self.app.showcase_lock:
-                    self.app.showcase_running = False
-                self.send_json({"ok": False, "error": "演示论文 PDF 不存在"}, status=404)
-                return
-            threading.Thread(target=_run_showcase_demo_with_logging, args=(self.app,), daemon=True).start()
-            self.send_json({"ok": True})
             return
         if parsed.path == "/api/config":
             try:
@@ -614,81 +488,96 @@ def _run_extraction_job_with_logging(config: dict[str, Any], runtime: RuntimeDep
             pass
 
 
-def _run_showcase_demo_with_logging(app: ChemExtractorApp) -> None:
+def _catalog_config(app: ChemExtractorApp) -> dict:
+    model = os.getenv("CHEM_PDF_EXTRACTOR_MODEL") or os.getenv("ARK_MODEL_ID") or ""
+    base_url = os.getenv("CHEM_PDF_EXTRACTOR_BASE_URL") or os.getenv("ARK_BASE_URL") or ""
+    api_key = os.getenv("CHEM_PDF_EXTRACTOR_API_KEY") or os.getenv("ARK_API_KEY") or ""
+    if not all((model, base_url, api_key)):
+        raise ValueError("云端模型配置不完整，请检查 .env")
+    return {"llm_provider": "cloud", "cloud_api_key": api_key,
+            "cloud_base_url": base_url, "cloud_model": model, "model": model,
+            "llm_timeout": 240, "chunk_size": 8000, "workers": 3,
+            "enrich_databases": True, "literature_limit": 3, "log": app.catalog_log,
+            "progress": app.catalog_task.update}
+
+
+def _catalog_report_complete(output: Path) -> bool:
+    from .claim_review import load_review
+    from .evidence_cards import load_cards
     try:
-        showcase.run_demo(app.runtime, app.showcase_log)
-    except Exception as exc:
-        log_exception(exc, context="showcase_demo")
-        with app.showcase_lock:
-            app.showcase_error = showcase.safe_error(exc)
-    finally:
-        with app.showcase_lock:
-            app.showcase_running = False
+        report = json.loads((output / "report.json").read_text())
+        source = (output / "source.md").read_text()
+        rows = report.get("records", [])
+        review = load_review(output, rows, source)
+        return review.get("status") == "complete" and load_cards(output, rows, source, review) is not None
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
 
 
-def _run_catalog_import(app: ChemExtractorApp, pmid: str) -> None:
+def _catalog_check_stages(output: Path) -> None:
+    # These stages retain the raw report even when their model call failed.
+    # Report a resumable failure, never turn a saved partial report into success.
+    for name, label in (("claim_review.json", "全文核对"), ("evidence_cards.json", "实验关联")):
+        try:
+            saved = json.loads((output / name).read_text())
+        except (OSError, ValueError):
+            raise RuntimeError(f"原始提取已保存，但{label}结果缺失；请重试继续。") from None
+        if saved.get("status") != "complete":
+            raise RuntimeError(f"原始提取已保存，但{label}未完成：{saved.get('error') or '请重试继续'}")
+
+
+def _run_catalog_import(app: ChemExtractorApp, identifier: str) -> None:
     from .biomedical import extract_article
-    from .sources import load_paper
+    from .sources import load_paper, resolve_pubmed_identifier
     from .science_skills import ScienceSkills
+    needs_pdf = False
+    error = ""
     try:
-        output = showcase.PROJECT_ROOT / "output" / "papers" / f"PMID-{pmid}"
-        if (output / "report.json").is_file():
-            app.catalog_log(f"PMID {pmid} 已在目录中")
+        config = _catalog_config(app)
+        app.catalog_task.update("loading", message=f"正在定位 {identifier} 并获取公开全文")
+        skills = ScienceSkills(PROJECT_ROOT / "output" / ".search_cache")
+        pmid = resolve_pubmed_identifier(identifier, skills)
+        output = PROJECT_ROOT / "output" / "papers" / f"PMID-{pmid}"
+        if _catalog_report_complete(output):
+            app.catalog_log(f"PMID {pmid} 已完成，无需重复提取")
             return
-        model = os.getenv("CHEM_PDF_EXTRACTOR_MODEL") or os.getenv("ARK_MODEL_ID") or ""
-        base_url = os.getenv("CHEM_PDF_EXTRACTOR_BASE_URL") or os.getenv("ARK_BASE_URL") or ""
-        api_key = os.getenv("CHEM_PDF_EXTRACTOR_API_KEY") or os.getenv("ARK_API_KEY") or ""
-        if not all((model, base_url, api_key)):
-            raise ValueError("云端模型配置不完整，请检查 .env")
-        skills = ScienceSkills(output / "database_cache")
         paper = load_paper(f"PMID:{pmid}", skills, app.runtime)
         if paper.get("scope") != "oa_full_text":
-            raise ValueError(f"PMID {pmid} 未取得公开全文；请下载 PDF 后使用 PDF 工作台")
-        app.catalog_log(f"已获取 PMID {pmid} 全文，开始提取本篇实验")
-        config = {"llm_provider": "cloud", "cloud_api_key": api_key,
-                  "cloud_base_url": base_url, "cloud_model": model, "model": model,
-                  "llm_timeout": 240, "chunk_size": 8000, "workers": 3,
-                  "enrich_databases": True, "literature_limit": 3, "log": app.catalog_log}
+            needs_pdf = True
+            raise ValueError("已找到文献信息，但当前未取得公开全文（可能未开放或获取失败）。请上传该论文 PDF 后提取；不会用摘要代替全文。")
+        app.catalog_log(f"已获取全文：{paper.get('title') or pmid}")
         rows = extract_article(paper, [], config, app.runtime, skills, output)
-        app.catalog_log(f"PMID {pmid} 已完成：{len(rows)} 条原始候选；目录仅收录本篇直接证据")
+        _catalog_check_stages(output)
+        app.catalog_log(f"已完成：{len(rows)} 条原始候选；通过核对的结果已进入列表")
     except Exception as exc:
         log_exception(exc, context="catalog_import")
-        with app.catalog_lock:
-            app.catalog_error = redact_sensitive_text(str(exc))
+        error = redact_sensitive_text(str(exc))
     finally:
-        with app.catalog_lock:
-            app.catalog_running = False
+        app.catalog_task.finish(error, needs_pdf=needs_pdf)
 
 
 def _run_catalog_pdf(app: ChemExtractorApp, pdf: Path, output: Path) -> None:
     from .biomedical import extract_article
     from .sources import load_paper
     from .science_skills import ScienceSkills
+    error = ""
     try:
-        if any(p["source_name"] == pdf.name for p in catalog.build_catalog()["papers"]):
-            app.catalog_log(f"{pdf.name} 已在目录中")
+        config = _catalog_config(app)
+        if _catalog_report_complete(output):
+            app.catalog_log(f"{pdf.name} 已完成，无需重复提取")
             return
-        model = os.getenv("CHEM_PDF_EXTRACTOR_MODEL") or os.getenv("ARK_MODEL_ID") or ""
-        base_url = os.getenv("CHEM_PDF_EXTRACTOR_BASE_URL") or os.getenv("ARK_BASE_URL") or ""
-        api_key = os.getenv("CHEM_PDF_EXTRACTOR_API_KEY") or os.getenv("ARK_API_KEY") or ""
-        if not all((model, base_url, api_key)):
-            raise ValueError("云端模型配置不完整，请检查 .env")
         skills = ScienceSkills(output / "database_cache")
+        app.catalog_task.update("loading", message=f"正在解析 {pdf.name}")
         paper = load_paper(str(pdf), skills, app.runtime)
-        app.catalog_log(f"{pdf.name} 已解析，开始提取本篇实验")
-        config = {"llm_provider": "cloud", "cloud_api_key": api_key,
-                  "cloud_base_url": base_url, "cloud_model": model, "model": model,
-                  "llm_timeout": 240, "chunk_size": 8000, "workers": 3,
-                  "enrich_databases": True, "literature_limit": 3, "log": app.catalog_log}
+        app.catalog_log(f"PDF 已解析，共 {len(paper['text'])} 字符")
         rows = extract_article(paper, [], config, app.runtime, skills, output)
-        app.catalog_log(f"{pdf.name} 已完成：{len(rows)} 条原始候选")
+        _catalog_check_stages(output)
+        app.catalog_log(f"已完成：{len(rows)} 条原始候选；通过核对的结果已进入列表")
     except Exception as exc:
         log_exception(exc, context="catalog_pdf")
-        with app.catalog_lock:
-            app.catalog_error = redact_sensitive_text(str(exc))
+        error = redact_sensitive_text(str(exc))
     finally:
-        with app.catalog_lock:
-            app.catalog_running = False
+        app.catalog_task.finish(error)
 
 
 def start_web_app(

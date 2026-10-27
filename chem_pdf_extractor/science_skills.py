@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .network import subprocess_tls_env
+
 SKILLS_ROOT = Path(__file__).resolve().parent.parent / "vendor" / "science-skills"
 
 
@@ -38,7 +40,7 @@ class ScienceSkills:
                 return json.loads(cache.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 pass
-        env = os.environ.copy()
+        env = subprocess_tls_env(os.environ.copy())
         env.setdefault("NCBI_TOOL", "SenoMiner_AI")
         if env.get("NCBI_EMAIL") and not env.get("USER_EMAIL"):
             env["USER_EMAIL"] = env["NCBI_EMAIL"]

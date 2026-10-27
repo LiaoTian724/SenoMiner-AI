@@ -163,4 +163,32 @@ def attach_evidence_stories(paper: dict, compound_name: str, source_text: str) -
             "scope": "只支持该体外组合的细胞结果，不能把疗效归给任一单药，也没有人体疗效或寿命证据。",
             "steps": [],
         })
+    # A short reading view for the supplied PCT paper. Every sentence below is
+    # tied to this source and the selected cell experiment, not a drug template.
+    pct_quote = "PCT selectively targets the senescent population for elimination"
+    pct_anchors = (
+        "Cells were exposed to 1 µM 5FU for 5 consecutive days. After 24 h of recovery in drug-free medium, cells were treated with 20 µM PCT for an additional 48 h.",
+        "Annexin V staining revealed a significant increase in early apoptosis in CCD and HCT116 cells that had been rendered senescent by 5FU",
+        "CCK8 viability assay shows that PCT significantly reduces viability in 5FU-primed CCD18Co and HCT116 cells",
+        "In contrast, non-senescent populations and HT29 cells, which do not strongly undergo senescence, were minimally affected",
+        "Immunocytochemical co-staining with SA-β -galactosidase confirmed that apoptotic cells were predominantly senescent",
+    )
+    if (str(paper.get("doi") or "").casefold() == "10.3390/ijms26189134"
+            and compound_name.casefold() == "piceatannol"
+            and lead.get("study_type") == "in_vitro"
+            and source_span(claim["quote"], pct_quote)
+            and all(source_span(source_text, text) for text in pct_anchors)):
+        claim.update({
+            "quote": source_span(source_text, pct_quote)["text"],
+            "location": "Results 2.2 · Figure 2C；Methods 4.2",
+            "reading_steps": [
+                "使用 CCD18Co 和 HCT116 细胞。",
+                "加入 1 μM 5-FU，连续处理 5 天，诱导细胞衰老。",
+                "在无药培养基中恢复 24 小时。",
+                "加入 20 μM Piceatannol，处理 48 小时。",
+                "使用 Annexin V、SA-β-gal 和 CCK8 检测凋亡、衰老状态与细胞存活率。",
+            ],
+            "result": "Piceatannol 处理后，衰老的 CCD18Co 和 HCT116 细胞凋亡增加、存活率下降；非衰老细胞和 HT29 细胞受到的影响较小。",
+            "scope": "支持 Piceatannol 在该细胞模型中选择性清除衰老细胞，尚未证明能够延缓人体衰老。",
+        })
     paper["lead_claim"] = claim

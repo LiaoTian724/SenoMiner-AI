@@ -180,7 +180,7 @@ def review_rows(rows: list[dict], source: str, config: dict, output: Path) -> di
             content = cloud_chat_completion(config["cloud_base_url"], config["cloud_api_key"],
                                             config.get("cloud_model") or config["model"], messages,
                                             int(config.get("llm_timeout") or 240),
-                                            response_dir=output / "review_responses", retry_count=2)
+                                            response_dir=output / "review_responses", retry_count=2, on_retry=log)
         payload = extract_json_object(content)
         result["raw_decisions"] = payload.get("decisions", [])
         result["decisions"] = validate_decisions(payload, rows, source)

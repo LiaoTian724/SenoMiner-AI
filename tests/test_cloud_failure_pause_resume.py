@@ -239,14 +239,14 @@ class CloudFailurePauseResumeTest(unittest.TestCase):
         self.assertEqual(urlopen_mock.call_count, 1)
         self.assertNotIn("sk-test-secret-123456789", str(ctx.exception))
 
-    def test_existing_ui_layout_contract_remains_intact(self):
-        template = (Path(__file__).resolve().parents[1] / "chem_pdf_extractor" / "templates" / "index.html").read_text(encoding="utf-8")
-
-        self.assertIn("UI layout contract", template)
-        self.assertIn("Only pre#logs may scroll internally", template)
-        self.assertIn("docs/开发说明.md", template)
-        self.assertIn('if (snapshot.pause_reason === "transient_cloud_failure") return "next_action_api_paused";', template)
-        self.assertIn("next_action_api_paused", template)
+    def test_catalog_exposes_progress_and_resumable_failure_without_raw_workbench(self):
+        root=Path(__file__).resolve().parents[1]/"chem_pdf_extractor"
+        template=(root/"templates"/"catalog.html").read_text(encoding="utf-8")
+        script=(root/"static"/"catalog.js").read_text(encoding="utf-8")
+        self.assertIn('id="taskProgress"',template)
+        self.assertIn('重试并继续',script)
+        self.assertNotIn('原始提取记录',template)
+        self.assertNotIn('id="cloudApiKey"',template)
 
 
 if __name__ == "__main__":

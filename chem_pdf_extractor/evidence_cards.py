@@ -252,7 +252,7 @@ def extract_cards(rows: list[dict], source: str, review: dict, config: dict, fol
                 content = cloud_chat_completion(config["cloud_base_url"], config["cloud_api_key"],
                                                 config.get("cloud_model") or config["model"], messages,
                                                 int(config.get("llm_timeout") or 240),
-                                                response_dir=folder / "card_responses", retry_count=2)
+                                                response_dir=folder / "card_responses", retry_count=2, on_retry=config.get("log"))
             data["raw"] = extract_json_object(content)
         except Exception as exc:
             data.update(status="error", error=redact_sensitive_text(str(exc))[:500])

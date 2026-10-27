@@ -338,7 +338,7 @@ class WorkflowTests(unittest.TestCase):
         runtime = RuntimeDeps(pd=pd, PdfReader=None, ChatPromptTemplate=None,
                               ChatOllama=None, Field=Field, create_model=create_model)
         paper = {'source': 'split.txt', 'text': 'A'*3000+'B'*2000, 'scope': 'local_document'}
-        for error in [CloudStructuredOutputError, TransientCloudAPIError]:
+        for error in [CloudStructuredOutputError]:
             with self.subTest(error=error.__name__), tempfile.TemporaryDirectory() as tmp:
                 def extract(_path, _config, _fields, _mapping, chunk):
                     if len(chunk) > 2500:
@@ -351,6 +351,22 @@ class WorkflowTests(unittest.TestCase):
                 with patch('chem_pdf_extractor.biomedical.extract_with_cloud_api', side_effect=AssertionError('cached')):
                     resumed = extract_article(paper, [], config, runtime, FakeSkills(), Path(tmp))
                 self.assertEqual(len(resumed), 3)
+
+    def test_network_failure_does_not_recursively_split_the_paper(self):
+        from chem_pdf_extractor.llm import TransientCloudAPIError
+        import pandas as pd
+        from pydantic import Field, create_model
+        runtime=RuntimeDeps(pd=pd,PdfReader=None,ChatPromptTemplate=None,ChatOllama=None,Field=Field,create_model=create_model)
+        events=[]
+        config={'enrich_databases':False,'chunk_size':8000,'workers':1,
+                'progress':lambda stage,**event:events.append((stage,event))}
+        with tempfile.TemporaryDirectory() as tmp, patch('chem_pdf_extractor.biomedical.extract_with_cloud_api',
+                side_effect=TransientCloudAPIError('timeout')) as call:
+            with self.assertRaises(TransientCloudAPIError):
+                extract_article({'source':'paper.txt','text':'a'*4000,'scope':'local_document'},[],config,runtime,FakeSkills(),Path(tmp))
+            call.assert_called_once()
+            self.assertEqual(events[0][1]['completed'],0)
+            self.assertFalse((Path(tmp)/'report.json').exists())
 
     def test_doi_resolution_requires_unique_id(self):
         with self.assertRaisesRegex(ValueError, 'unique'):

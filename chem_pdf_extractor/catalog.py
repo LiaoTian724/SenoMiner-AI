@@ -38,6 +38,10 @@ def _object(value: Any) -> dict:
 def _name(name: str, names_in_paper: set[str]) -> str:
     """Only expand the local D+Q abbreviation when this paper defines it."""
     cleaned = re.sub(r"\s+", " ", name).strip()
+    # A drug class has no single molecular identity. Keep it in raw reports,
+    # but never present e.g. "HSP90 inhibitors" as one compound with a 3D model.
+    if re.search(r"(?:\b(?:inhibitors|agonists|antagonists|compounds|drugs|senolytics)|类化合物|抑制剂类)\s*$", cleaned, re.I):
+        return ""
     has_definition = any("dasatinib" in n.casefold() and "quercetin" in n.casefold()
                          and re.search(r"\bD\s*\+\s*Q\b", n, re.I) for n in names_in_paper)
     if has_definition and (re.search(r"\bD\s*\+\s*Q\b", cleaned, re.I)
@@ -206,7 +210,8 @@ def build_catalog(root: Path = PROJECT_ROOT) -> dict:
     # Stable ties preserve each article's extraction order rather than alphabetising drugs.
     items = sorted(compounds.values(), key=lambda c: -c["latest_read_timestamp"])
     papers.sort(key=lambda p: -p["read_timestamp"])
-    processed_sources = {p["source_name"] for p in papers}
+    processed_sources = {p["source_name"] for p in papers
+                         if p["review_status"] == "complete" and p["card_status"] == "complete"}
     local_pdfs = [{"name": p.name, "processed": p.name in processed_sources}
                   for p in sorted((root / "input_pdfs").glob("*.pdf")) if p.is_file()][:100]
     return {"compounds": items, "papers": papers, "local_pdfs": local_pdfs,
@@ -224,13 +229,21 @@ def local_pdf_output(name: str, root: Path = PROJECT_ROOT) -> Path:
 
 
 def search_pubmed(query: str, root: Path = PROJECT_ROOT, limit: int = 8) -> list[dict]:
-    clean = re.sub(r"[\x00-\x1f\[\]{}\"']", " ", str(query or ""))[:120].strip()
+    from .sources import normalize_identifier, resolve_pubmed_identifier
+    raw_query = str(query or "").strip()
+    clean = re.sub(r"[\x00-\x1f\[\]{}\"']", " ", raw_query)[:120].strip()
     if len(clean) < 3:
         raise ValueError("请输入至少 3 个字符的检索词")
     skills = ScienceSkills(root / "output" / ".search_cache")
-    ids = skills.call("pubmed", "search_pubmed",
-                      f'({clean}) AND (senolytic OR senescence OR aging) NOT Review[pt]',
-                      "--max_results", str(limit))
+    try:
+        identifier = normalize_identifier(raw_query)
+    except ValueError:
+        identifier = ""
+        if re.match(r"^(?:doi:|https?://(?:dx\.)?doi\.org/|10\.)", raw_query, re.I):
+            raise ValueError("DOI 格式不正确，请输入完整 DOI 或上传 PDF。")
+    ids = ([resolve_pubmed_identifier(identifier, skills)] if identifier else skills.call(
+        "pubmed", "search_pubmed", f'({clean}) AND (senolytic OR senescence OR aging) NOT Review[pt]',
+        "--max_results", str(limit)))
     ids = [str(x) for x in ids if str(x).isdigit()][:limit]
     if not ids:
         return []
