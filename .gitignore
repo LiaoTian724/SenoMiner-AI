@@ -23,6 +23,7 @@ logs/
 *.log
 *.pdf
 *.PDF
+*.pptx
 提取结果.xlsx
 提取结果.partial.jsonl
 错误日志.txt

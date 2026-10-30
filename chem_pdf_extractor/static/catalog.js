@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 let state = {compounds:[],papers:[],local_pdfs:[],summary:{}};
-let selected = null, selectedPart = 0, structureSdf = '', renderMode = 'canvas', stopAnimation = null, webglViewer = null, moleculeLoad = 0;
+let selected = null, selectedPart = 0, structureSdf = '', renderMode = 'auto', molecularStyle = 'ballstick', initialMoleculeView = null, stopAnimation = null, webglViewer = null, moleculeLoad = 0;
 let catalogPage = 1, pageSize = 5;
 let catalogRenderKey = '', previewGeneration = 0, previewStops = [];
 const structureCache = new Map();
@@ -41,7 +41,7 @@ async function renderPreviews(items,generation) {
     try {
       const data=await structureData(part.cid);
       if(generation!==previewGeneration||!box.isConnected)return;
-      previewStops.push(canvas3D(data.sdf,box,{preview:true,animate:false}));
+      previewStops.push(preview3D(data.sdf,box));
       const caption=$(`preview-source-${index}-${i}`);
       caption.textContent=data.origin==='rdkit_etkdg'?'计算构象':'PubChem';
       caption.title=(data.label||'')+'；拖动分子可旋转';
@@ -52,15 +52,22 @@ async function renderPreviews(items,generation) {
     }
   })));
 }
+function recordMatches(record,q,study,effect) {
+  if(study&&record.study_type!==study||effect&&record.effect_type!==effect)return false;
+  const source=record.source||{};
+  const text=[record.compound_name,record.result,record.study_label,record.effect_label,record.model,record.induction,record.induction_agent,record.induction_conditions,record.recovery,record.dose,record.duration,record.route,record.control,record.sample_size,record.assay,source.title,source.pmid,source.doi].join(' ').normalize('NFKC').toLocaleLowerCase();
+  return q.normalize('NFKC').toLocaleLowerCase().split(/\s+/).filter(Boolean).every(word=>text.includes(word));
+}
+function recordQuery() { return {q:$('catalogSearch').value.trim().toLocaleLowerCase().slice(0,200),study:$('studyFilter').value,effect:$('effectFilter').value}; }
 function renderCatalog() {
-  const q=$('catalogSearch').value.trim().toLocaleLowerCase();
-  const items=state.compounds.filter(c => (c.name+' '+c.papers.map(p=>p.title).join(' ')).toLocaleLowerCase().includes(q));
+  const {q,study,effect}=recordQuery();
+  const items=state.compounds.filter(c=>c.papers.some(p=>(p.experiment_records||[]).some(r=>recordMatches(r,q,study,effect))));
   const totalPages=Math.max(1,Math.ceil(items.length/pageSize)); catalogPage=Math.max(1,Math.min(catalogPage,totalPages));
   const pageItems=items.slice((catalogPage-1)*pageSize,catalogPage*pageSize);
   $('catalogCount').textContent=`${state.summary.compounds||0} 个化合物/组合 · ${state.summary.papers||0} 篇文献`;
   const pending=state.papers.filter(p=>p.review_status!=='complete'||p.card_status!=='complete').length;
   $('statusLine').textContent=`按文献读取时间从新到旧排列。${pending?` ${pending} 篇尚待完成核对。`:''}`;
-  const key=JSON.stringify([q,catalogPage,pageSize,pageItems.map(c=>[c.id,c.name,c.identity,c.papers.map(p=>[p.title,p.read_at])])]);
+  const key=JSON.stringify([q,study,effect,catalogPage,pageSize,pageItems.map(c=>[c.id,c.name,c.identity,c.papers.map(p=>[p.title,p.read_at])])]);
   if(key!==catalogRenderKey) {
     catalogRenderKey=key;const generation=++previewGeneration;
     previewStops.forEach(stop=>stop());previewStops=[];
@@ -121,7 +128,7 @@ function outcomeHtml(o) {
 }
 function technicalHtml(g) {
   const evidence=Object.entries(g.protocol_evidence||{}).filter(([,v])=>v?.quote);
-  const labels={model:'实验对象',dose:'剂量',duration:'处理时间',route:'给药',control:'对照',sample_size:'样本数',assay:'检测方法'};
+  const labels={model:'研究对象',dose:'活性药物剂量',duration:'处理时间',route:'给药',control:'对照',sample_size:'样本量',assay:'检测方法',induction:'造模 / 预处理',induction_agent:'衰老诱导剂',induction_conditions:'诱导条件',recovery:'恢复培养'};
   return `<details class="technical"><summary>原文参数与更多检测结果</summary>${evidence.length?`<details class="outcome"><summary>实验参数的原文</summary>${evidence.map(([k,v])=>`<p><b>${esc(labels[k]||k)}：</b>${esc(v.quote)}</p>`).join('')}</details>`:''}${g.outcomes.map(outcomeHtml).join('')}
   <details class="outcome"><summary>原文实验步骤（${g.steps.length}）</summary>${g.steps.length?`<ol class="steps">${g.steps.map(s=>`<li>${esc(s.action)}<div class="quote">${esc(s.quote)}</div></li>`).join('')}</ol>`:'<p class="small muted">原文未提供可核对的连续步骤，请查 Methods 与补充材料。</p>'}</details></details>`;
 }
@@ -134,22 +141,36 @@ function protocolHtml(story) {
   ].filter(Boolean);
   return `<ol class="experiment-steps">${steps.map(step=>`<li>${esc(step)}</li>`).join('')}</ol>`;
 }
-function experimentHtml(g) {
-  const s=g.story||{},quote=s.quote||g.outcomes[0]?.quote||'';
-  return `<details class="extra-experiment"><summary>${esc(g.title)} · ${studyLabel(g.study_type)}</summary><div class="extra-content">
-  <p class="citation">${esc(s.location)}</p><p class="quote-inline">${esc(quote)}</p>${protocolHtml(s)}
-  <p><b>实验结果：</b>${esc(s.result||'原文未报告')}</p><p><b>结论：</b>${esc(s.scope||'待核对')}</p>${technicalHtml(g)}</div></details>`;
+function experimentTable(record) {
+  const rows=[['实验类型',record.study_label],['论文报告作用类型',record.effect_label],['研究对象',record.model]];
+  if(record.induction_agent)rows.push(['衰老诱导剂',record.induction_agent]);
+  if(record.induction_conditions)rows.push(['诱导条件',record.induction_conditions]);
+  else if(record.induction)rows.push(['造模 / 预处理',record.induction]);
+  if(record.recovery)rows.push(['恢复培养',record.recovery]);
+  rows.push(['活性药物浓度 / 剂量',record.dose],['处理时间',record.duration]);
+  if(record.route)rows.push(['给药方式 / 频率',record.route]);
+  rows.push(['对照',record.control]);
+  if(record.sample_size)rows.push(['样本量',record.sample_size]);
+  rows.push(['检测方法',record.assay],['实验结果',record.result]);
+  return `<table class="experiment-table"><caption>实验条件与结果</caption><thead><tr><th scope="col">字段</th><th scope="col">论文中的实验数据</th></tr></thead><tbody>${rows.map(([label,value])=>`<tr><th scope="row">${esc(label)}</th><td>${value?esc(value):'<span class="unreported">未提取</span>'}</td></tr>`).join('')}</tbody></table>`;
+}
+function experimentRecordHtml(record,group,story) {
+  return `<section class="experiment-record">${experimentTable(record)}
+    <section class="record-evidence"><h4>原文证据</h4><p class="citation">${esc(record.evidence_location)}</p><blockquote>${esc(String(record.evidence_quote||'').replace(/\s+/g,' '))}</blockquote></section>
+    <p class="record-conclusion"><b>实验结论：</b>${esc(record.conclusion||'未提取')}</p>
+    <details class="protocol-details"><summary>详细实验操作与原文参数</summary>${protocolHtml(story)}${technicalHtml(group)}</details>
+  </section>`;
 }
 function paperHtml(p) {
-  const links=[/^\d+$/.test(p.pmid)?`<a href="https://pubmed.ncbi.nlm.nih.gov/${p.pmid}/" target="_blank" rel="noopener noreferrer">PubMed PMID ${p.pmid}</a>`:'',p.doi?`<a href="https://doi.org/${encodeURI(p.doi)}" target="_blank" rel="noopener noreferrer">DOI ${esc(p.doi)}</a>`:''].filter(Boolean).join(' · ');
-  const claim=p.lead_claim||{},lead=p.groups.find(g=>g.id===claim.group_id)||p.groups[0],others=p.groups.filter(g=>g!==lead);
-  return `<article class="paper-story"><p class="paper-source">${esc(p.title)}${links?' · '+links:''}</p>
-  <p class="study-context">${studyLabel(lead.study_type)}</p>
-  <section class="story-section"><h3>1. 原文依据</h3><p class="citation">${esc(claim.location||'Results')} · ${esc(p.source_name)}</p><blockquote>${esc(String(claim.quote||'原文结果引文待核对').replace(/\s+/g,' '))}</blockquote></section>
-  <section class="story-section"><h3>2. 实验步骤</h3>${protocolHtml(claim)}</section>
-  <section class="story-section"><h3>3. 实验结果</h3><p>${esc(claim.result||'请查看原文结果引文')}</p></section>
-  <section class="story-section"><h3>4. 结论</h3><p>${esc(claim.scope||'证据范围待核对')}</p></section>
-  ${technicalHtml(lead)}${others.length?`<details class="other-experiments"><summary>其他实验（${others.length}）</summary>${others.map(experimentHtml).join('')}</details>`:''}</article>`;
+  const query=recordQuery(),all=p.experiment_records||[];
+  const records=all.filter(r=>recordMatches(r,query.q,query.study,query.effect));
+  if(!records.length)return '';
+  const links=[/^\d+$/.test(p.pmid)?`<a href="https://pubmed.ncbi.nlm.nih.gov/${p.pmid}/" target="_blank" rel="noopener noreferrer">PMID ${p.pmid}</a>`:'',p.doi?`<a href="https://doi.org/${encodeURI(p.doi)}" target="_blank" rel="noopener noreferrer">DOI ${esc(p.doi)}</a>`:''].filter(Boolean).join(' · ');
+  const render=record=>{const group=p.groups.find(g=>g.id===record.group_id);const story=record.primary?p.lead_claim:group?.story;return group?experimentRecordHtml(record,group,story||{}):''};
+  const [primary,...others]=records;
+  return `<article class="paper-story"><h3 class="record-heading">实验记录</h3>${records.length<all.length?'<p class="small muted">显示符合当前筛选条件的实验。</p>':''}${render(primary)}
+    <section class="literature-source"><h4>文献来源</h4><p>${sourceLink(p)}</p><p class="citation">${links}${p.year?' · '+esc(p.year):''}</p><p class="citation">${esc(p.source_name)}</p></section>
+    ${others.length?`<details class="other-experiments"><summary>同篇其他独立实验（${others.length}）</summary>${others.map((record,i)=>`<details class="extra-experiment"><summary>实验 ${i+2} · ${esc(record.title)} · ${esc(record.study_label)}</summary>${render(record)}</details>`).join('')}</details>`:''}</article>`;
 }
 function identityHtml(id) {
   const parts=id.components?.length?id.components:[id];
@@ -159,10 +180,10 @@ function identityHtml(id) {
     if(/^CHEMBL\d+$/.test(String(p.chembl_id||''))) a.push(`<a href="https://www.ebi.ac.uk/chembl/explore/compound/${p.chembl_id}" target="_blank" rel="noopener noreferrer">${esc(p.name)} · ${esc(p.chembl_id)}</a>`);
     return a;
   });
-  return `<section class="compound-overview" aria-label="化合物信息与分子结构"><div class="identity-grid"><div class="viewer-panel"><strong>3D 分子结构</strong><div class="component-tabs" id="componentTabs">${parts.map((p,i)=>`<button data-part="${i}" class="${i===0?'active':''}">${esc(p.name||id.name)}</button>`).join('')}</div><div id="moleculeView" class="molecule-view"><div class="viewer-message">正在读取 3D 结构…</div></div><div class="viewer-actions"><button data-mode="canvas">兼容 3D</button><button data-mode="webgl">WebGL 3D</button><button data-reset="1">重置视角</button></div><p class="viewer-note" id="structureOrigin">PubChem 构象或 RDKit 计算构象，可拖动旋转。</p></div><div><h3 id="componentName">${esc(parts[0]?.name||id.name)}</h3><div class="properties" id="componentProps"></div><div class="external-links">${links.join('')}</div><details class="related-literature"><summary>拓展：PubMed 相关文献</summary><div id="relatedLiterature"></div></details></div></div></section>`;
+  return `<section class="compound-overview" aria-label="化合物信息与分子结构"><div class="identity-grid"><div class="viewer-panel"><strong>3D 分子结构</strong><div class="component-tabs" id="componentTabs">${parts.map((p,i)=>`<button data-part="${i}" class="${i===0?'active':''}">${esc(p.name||id.name)}</button>`).join('')}</div><div id="moleculeView" class="molecule-view"><div class="viewer-message">正在读取 3D 结构…</div></div><div class="viewer-actions"><button data-style="ballstick" aria-pressed="true">球棍</button><button data-style="spacefill" aria-pressed="false">空间填充</button><button data-reset="1">重置视角</button><button data-mode="canvas" title="浏览器无法正常显示立体模型时使用">兼容显示</button></div><p class="viewer-note" id="viewerStatus" role="status"></p><p class="viewer-note" id="structureOrigin">PubChem 构象或 RDKit 计算构象，可拖动旋转。</p></div><div><h3 id="componentName">${esc(parts[0]?.name||id.name)}</h3><div class="properties" id="componentProps"></div><div class="external-links">${links.join('')}</div><details class="related-literature"><summary>拓展：PubMed 相关文献</summary><div id="relatedLiterature"></div></details></div></div></section>`;
 }
 function openDetail(index) {
-  selected=state.compounds[index]; selectedPart=0; renderMode='canvas'; if(!selected)return;
+  selected=state.compounds[index]; selectedPart=0; renderMode='auto'; molecularStyle='ballstick'; if(!selected)return;
   $('detailTitle').textContent=selected.name;
   $('detailBody').innerHTML=`<section class="chemistry-section" aria-label="分子结构与数据库信息"><h3>分子结构与数据库信息</h3>${identityHtml(selected.identity||{})}</section>${selected.papers.map(paperHtml).join('')}`;
   $('detailDialog').showModal(); $('detailDialog').scrollTop=0;
@@ -197,7 +218,78 @@ function parseSdf(sdf) {
   if(!atoms.length||atoms.some(a=>![a.x,a.y,a.z].every(Number.isFinite)))throw Error('PubChem 3D 坐标无效');
   return {atoms,bonds:bonds.filter(([a,b])=>a>=0&&b>=0&&a<atoms.length&&b<atoms.length)};
 }
-function canvas3D(sdf,box,{preview=false,animate=true}={}) {
+// Three reusable contexts at most: thumbnail snapshots, hovered thumbnail, detail.
+// Moving a stable host preserves 3Dmol's listeners; setContainer would rebind them.
+let thumbnailGpu=null, previewGpu=null, detailGpu=null, activePreview=null;
+function moleculeStyle(style='ballstick') {
+  return style==='spacefill'?{sphere:{colorscheme:'Jmol'}}:{stick:{radius:.16,colorscheme:'Jmol'},sphere:{scale:.32,colorscheme:'Jmol'}};
+}
+function gpuSlot(interactive=true) {
+  const lib=window.$3Dmol||window['3Dmol'];if(!lib)throw Error('立体显示组件尚未加载');
+  const parking=document.createElement('div'),host=document.createElement('div');
+  parking.className='molecule-render-buffer';host.className='molecule-gpu-host';parking.append(host);document.body.append(parking);
+  let viewer;
+  try{viewer=lib.createViewer(host,{backgroundColor:'#ffffff',antialias:true,nomouse:!interactive});}
+  catch(error){parking.remove();throw error}
+  viewer.getCanvas().setAttribute('role','img');viewer.getCanvas().setAttribute('aria-label','分子三维结构，可拖动旋转及滚轮缩放');
+  const slot={parking,host,viewer,lost:false,onLost:null,baseView:viewer.getView()};
+  viewer.getCanvas().addEventListener('webglcontextlost',e=>{e.preventDefault();slot.lost=true;slot.onLost?.()});
+  viewer.getCanvas().addEventListener('webglcontextrestored',()=>{slot.lost=false});
+  return slot;
+}
+function loadGpu(slot,sdf,style='ballstick',view=null) {
+  if(slot.lost)throw Error('浏览器立体显示暂不可用');
+  const v=slot.viewer;v.removeAllModels();v.addModel(sdf,'sdf');v.setStyle({},moleculeStyle(style));v.resize();v.setView(slot.baseView);
+  v.zoomTo();v.rotate(20,'y');v.rotate(-15,'x');if(view)v.setView(view);v.render();
+  return v.getView();
+}
+function parkGpu(slot) {
+  slot.onLost=null;slot.parking.append(slot.host);
+  if(!slot.lost)slot.viewer.clear();
+}
+function webglPreview(sdf,box) {
+  thumbnailGpu=thumbnailGpu||gpuSlot(false);
+  const rect=box.getBoundingClientRect();thumbnailGpu.parking.style.width=`${Math.max(rect.width,80)}px`;thumbnailGpu.parking.style.height=`${Math.max(rect.height,80)}px`;
+  const initial=loadGpu(thumbnailGpu,sdf);
+  const image=document.createElement('img');image.src=thumbnailGpu.viewer.pngURI();image.alt=`${box.dataset.molecule||'分子'}的立体球棍模型`;image.draggable=false;
+  box.replaceChildren(image);box.dataset.renderer='webgl';
+  let view=initial,disposed=false,dragging=false,hover=false,fallbackStop=null;
+  function deactivate() {
+    if(activePreview?.box!==box)return;
+    if(!previewGpu.lost){view=previewGpu.viewer.getView();image.src=previewGpu.viewer.pngURI()}
+    parkGpu(previewGpu);box.classList.remove('preview-interactive');activePreview=null;
+  }
+  function fallback(){deactivate();box.dataset.renderer='canvas';fallbackStop=canvas3D(sdf,box,{preview:true,animate:false})}
+  function activate() {
+    if(disposed||fallbackStop||activePreview?.box===box)return;
+    activePreview?.deactivate();
+    try {
+      previewGpu=previewGpu||gpuSlot();box.append(previewGpu.host);loadGpu(previewGpu,sdf,'ballstick',view);
+      box.classList.add('preview-interactive');activePreview={box,deactivate};previewGpu.onLost=fallback;
+    } catch(error){if(previewGpu)parkGpu(previewGpu);fallback()}
+  }
+  function enter(){hover=true;activate()}
+  function leave(){hover=false;if(!dragging)deactivate()}
+  function down(){dragging=true}
+  function up(){dragging=false;if(!hover)deactivate()}
+  box.addEventListener('mouseenter',enter);box.addEventListener('mouseleave',leave);box.addEventListener('mousedown',down);window.addEventListener('mouseup',up);
+  const resize=new ResizeObserver(()=>{if(activePreview?.box===box&&!previewGpu.lost){previewGpu.viewer.resize();previewGpu.viewer.render()}});resize.observe(box);
+  return ()=>{disposed=true;deactivate();fallbackStop?.();resize.disconnect();box.removeEventListener('mouseenter',enter);box.removeEventListener('mouseleave',leave);box.removeEventListener('mousedown',down);window.removeEventListener('mouseup',up)};
+}
+function preview3D(sdf,box) {
+  try{return webglPreview(sdf,box)}
+  catch(error){box.dataset.renderer='canvas';return canvas3D(sdf,box,{preview:true,animate:false})}
+}
+function webgl3D(sdf,box,style) {
+  detailGpu=detailGpu||gpuSlot();
+  if(detailGpu.lost)throw Error('浏览器立体显示暂不可用');
+  box.replaceChildren(detailGpu.host);const initial=loadGpu(detailGpu,sdf,style);webglViewer=detailGpu.viewer;
+  detailGpu.onLost=()=>{renderMode='canvas';renderStructure()};box.dataset.renderer='webgl';
+  const resize=new ResizeObserver(()=>{if(!detailGpu.lost){webglViewer?.resize();webglViewer?.render()}});resize.observe(box);
+  return {initial,stop:()=>{resize.disconnect();parkGpu(detailGpu);webglViewer=null}};
+}
+
+function canvas3D(sdf,box,{preview=false,animate=false,style='ballstick'}={}) {
   const {atoms,bonds}=parseSdf(sdf),canvas=document.createElement('canvas'); box.replaceChildren(canvas);
   canvas.setAttribute('role','img');canvas.setAttribute('aria-label',`${box.dataset.molecule||'分子'}的 3D 结构，可拖动旋转`);
   const ctx=canvas.getContext('2d'); if(!ctx)throw Error('浏览器无法创建 Canvas');
@@ -205,43 +297,55 @@ function canvas3D(sdf,box,{preview=false,animate=true}={}) {
   const max=[Math.max(...atoms.map(a=>a.x)),Math.max(...atoms.map(a=>a.y)),Math.max(...atoms.map(a=>a.z))];
   const mid=min.map((v,i)=>(v+max[i])/2);
   const radius=Math.max(...atoms.map(a=>Math.hypot(a.x-mid[0],a.y-mid[1],a.z-mid[2])),1);
-  let rx=-0.25,ry=0.5,drag=null,active=true,frame=0;
+  let rx=-0.25,ry=0.5,drag=null,active=true,frame=0,zoom=1;
   const colors={C:'#727b81',H:'#e3e7e9',O:'#c83b35',N:'#365fba',S:'#c29c19',Cl:'#4f9b54',F:'#56a65c',P:'#dd9044'};
   function draw(){if(!active)return;const rect=box.getBoundingClientRect(),dpr=window.devicePixelRatio||1,w=rect.width,h=rect.height;
     if(!w||!h)return;
     if(canvas.width!==Math.round(w*dpr)||canvas.height!==Math.round(h*dpr)){canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr)}
-    ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.fillStyle='#fbfcfd';ctx.fillRect(0,0,w,h);
-    const scale=Math.max(1,Math.min(w,h)-28)/(radius*2.5),size=preview?0.68:1;
+    ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.fillStyle='#ffffff';ctx.fillRect(0,0,w,h);
+    const scale=Math.max(1,Math.min(w,h)-28)/(radius*(style==='spacefill'?3.3:2.7))*zoom;
     const pts=atoms.map(a=>{let x=(a.x-mid[0])*scale,y=(a.y-mid[1])*scale,z=(a.z-mid[2])*scale;
       const xx=x*Math.cos(ry)+z*Math.sin(ry),zz=z*Math.cos(ry)-x*Math.sin(ry);
       const yy=y*Math.cos(rx)-zz*Math.sin(rx),depth=y*Math.sin(rx)+zz*Math.cos(rx);
-      const perspective=600/(600-depth);return {x:w/2+xx*perspective,y:h/2-yy*perspective,z:depth,r:(a.el==='H'?3.4:6.4)*perspective*size,el:a.el};});
-    for(const [a,b] of bonds){const u=pts[a],v=pts[b];ctx.beginPath();ctx.moveTo(u.x,u.y);ctx.lineTo(v.x,v.y);ctx.strokeStyle='#98a1a7';ctx.lineWidth=preview?1.8:3;ctx.stroke()}
-    for(const p of [...pts].sort((a,b)=>a.z-b.z)){ctx.beginPath();ctx.arc(p.x,p.y,Math.max(1.5,p.r),0,Math.PI*2);ctx.fillStyle=colors[p.el]||'#866ea0';ctx.fill();ctx.strokeStyle='#455058';ctx.lineWidth=.5;ctx.stroke()}
+      const perspective=600/(600-depth);return {x:w/2+xx*perspective,y:h/2-yy*perspective,z:depth,r:({H:1.2,C:1.7,N:1.55,O:1.52,S:1.8,P:1.8,F:1.47,Cl:1.75,Br:1.85,I:1.98}[a.el]||1.7)*scale*(style==='spacefill'?1:.32)*perspective,el:a.el};});
+    // Sort atoms and short bond segments together for depth occlusion.
+    const pieces=pts.map(p=>({z:p.z,atom:p}));
+    if(style!=='spacefill')for(const [a,b] of bonds){const u=pts[a],v=pts[b];for(let j=0;j<12;j++){const t=j/12,k=(j+1)/12;pieces.push({z:u.z+(v.z-u.z)*(t+k)/2,bond:{x:u.x+(v.x-u.x)*t,y:u.y+(v.y-u.y)*t,xx:u.x+(v.x-u.x)*k,yy:u.y+(v.y-u.y)*k,color:colors[t<.5?u.el:v.el]||'#866ea0'}})}}
+    for(const piece of pieces.sort((a,b)=>a.z-b.z)) {
+      if(piece.bond){const b=piece.bond;ctx.beginPath();ctx.moveTo(b.x,b.y);ctx.lineTo(b.xx,b.yy);ctx.strokeStyle=b.color;ctx.lineWidth=Math.max(1,scale*.25);ctx.lineCap='round';ctx.stroke();continue}
+      const p=piece.atom,r=Math.max(1,p.r),base=colors[p.el]||'#866ea0';
+      const shade=ctx.createRadialGradient(p.x-r*.32,p.y-r*.38,r*.05,p.x,p.y,r);
+      shade.addColorStop(0,'#ffffff');shade.addColorStop(.24,base);shade.addColorStop(.78,base);shade.addColorStop(1,'#394550');
+      ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=shade;ctx.fill();
+    }
     if(animate){if(!drag)ry+=0.003;frame=requestAnimationFrame(draw)}}
   function down(e){drag=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId)}
-  function move(e){if(!drag)return;ry+=(e.clientX-drag[0])*.012;rx+=(e.clientY-drag[1])*.012;drag=[e.clientX,e.clientY];if(!animate)draw()}
+  function move(e){if(!drag)return;ry+=(e.clientX-drag[0])*.012;rx+=(e.clientY-drag[1])*.012;drag=[e.clientX,e.clientY];draw()}
   function up(){drag=null}
+  function wheel(e){e.preventDefault();zoom=Math.max(.5,Math.min(2.5,zoom*Math.exp(-e.deltaY*.001)));draw()}
+  canvas.addEventListener('wheel',wheel,{passive:false});
   canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointermove',move);
   canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',up);canvas.addEventListener('lostpointercapture',up);
   const resize=new ResizeObserver(()=>{if(!animate)draw()});resize.observe(box);
-  draw();return ()=>{active=false;cancelAnimationFrame(frame);resize.disconnect();canvas.removeEventListener('pointerdown',down);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',up);canvas.removeEventListener('pointercancel',up);canvas.removeEventListener('lostpointercapture',up)};
+  draw();return ()=>{active=false;cancelAnimationFrame(frame);resize.disconnect();canvas.removeEventListener('wheel',wheel);canvas.removeEventListener('pointerdown',down);canvas.removeEventListener('pointermove',move);canvas.removeEventListener('pointerup',up);canvas.removeEventListener('pointercancel',up);canvas.removeEventListener('lostpointercapture',up)};
 }
 function renderStructure() {
-  if(stopAnimation){stopAnimation();stopAnimation=null} webglViewer=null;
+  if(stopAnimation){stopAnimation();stopAnimation=null} webglViewer=null;initialMoleculeView=null;
   const box=$('moleculeView'); if(!structureSdf){box.innerHTML='<div class="viewer-message">暂无 3D 结构</div>';return}
-  try {
-    if(renderMode==='webgl'&&window.$3Dmol&&document.createElement('canvas').getContext('webgl')) {
-      box.replaceChildren(); webglViewer=$3Dmol.createViewer(box,{backgroundColor:'#fbfcfd'});
-      webglViewer.addModel(structureSdf,'sdf');webglViewer.setStyle({},{stick:{radius:.14},sphere:{scale:.3}});webglViewer.zoomTo();webglViewer.render();webglViewer.resize();
-      const canvas=box.querySelector('canvas');if(canvas)canvas.addEventListener('webglcontextlost',()=>{renderMode='canvas';renderStructure()},{once:true});
-    } else {renderMode='canvas';stopAnimation=canvas3D(structureSdf,box)}
-  } catch(e) {renderMode='canvas';try{stopAnimation=canvas3D(structureSdf,box)}catch(inner){box.innerHTML=`<div class="viewer-message">${esc(inner.message)}</div>`}}
+  let fallback=renderMode==='canvas';
+  if(!fallback)try {
+    const gpu=webgl3D(structureSdf,box,molecularStyle);stopAnimation=gpu.stop;initialMoleculeView=gpu.initial;
+  } catch(error){if(detailGpu)parkGpu(detailGpu);fallback=true}
+  if(fallback)try{box.dataset.renderer='canvas';stopAnimation=canvas3D(structureSdf,box,{style:molecularStyle})}
+  catch(error){box.innerHTML=`<div class="viewer-message">${esc(error.message)}</div>`}
+  $('viewerStatus').textContent=fallback?'当前为兼容显示。可拖动旋转、滚轮缩放。':'立体显示 · 拖动旋转，滚轮缩放。';
+  for(const b of $('detailBody').querySelectorAll('[data-style]'))b.setAttribute('aria-pressed',String(b.dataset.style===molecularStyle));
+  const toggle=$('detailBody').querySelector('[data-mode]');if(toggle){toggle.dataset.mode=fallback?'auto':'canvas';toggle.textContent=fallback?'尝试立体显示':'兼容显示'}
 }
 async function showMolecule() {
   const load = ++moleculeLoad;
   const part=compoundParts(selected)[selectedPart]||{};
-  setComponentInfo(part);structureSdf='';if(stopAnimation){stopAnimation();stopAnimation=null}
+  setComponentInfo(part);structureSdf='';webglViewer=null;if(stopAnimation){stopAnimation();stopAnimation=null}
   const box=$('moleculeView');box.innerHTML='<div class="viewer-message">正在读取 PubChem 3D 结构…</div>';
   if(!/^\d+$/.test(String(part.cid||''))){box.innerHTML='<div class="viewer-message">此成分没有经过确认的 PubChem CID，无法显示 3D 结构。</div>';return}
   try{const data=await structureData(part.cid);if(load!==moleculeLoad||!$('detailDialog').open)return;structureSdf=data.sdf;$('structureOrigin').textContent=data.label+(data.origin==='rdkit_etkdg'?'（计算生成，非实验测定）。':'。')+' 可拖动旋转。';renderStructure()}
@@ -249,13 +353,27 @@ async function showMolecule() {
 }
 $('catalogRows').addEventListener('click',e=>{if(e.target.closest('[data-retry-preview]')){catalogRenderKey='';renderCatalog();return}const b=e.target.closest('[data-open]');if(b)openDetail(Number(b.dataset.open))});
 $('closeDetail').addEventListener('click',()=>$('detailDialog').close());
-$('detailDialog').addEventListener('close',()=>{moleculeLoad++;if(stopAnimation){stopAnimation();stopAnimation=null}});
+$('detailDialog').addEventListener('close',()=>{moleculeLoad++;webglViewer=null;if(stopAnimation){stopAnimation();stopAnimation=null}});
 $('detailBody').addEventListener('click',e=>{
   const part=e.target.closest('[data-part]');if(part){selectedPart=Number(part.dataset.part);showMolecule()}
+  const style=e.target.closest('[data-style]');if(style&&structureSdf){molecularStyle=style.dataset.style;if(webglViewer){webglViewer.setStyle({},moleculeStyle(molecularStyle));webglViewer.render();for(const b of $('detailBody').querySelectorAll('[data-style]'))b.setAttribute('aria-pressed',String(b.dataset.style===molecularStyle))}else renderStructure()}
   const mode=e.target.closest('[data-mode]');if(mode&&structureSdf){renderMode=mode.dataset.mode;renderStructure()}
-  if(e.target.closest('[data-reset]')){if(webglViewer){webglViewer.zoomTo();webglViewer.render()}else if(structureSdf)renderStructure()}
+  if(e.target.closest('[data-reset]')){if(webglViewer){webglViewer.setView(initialMoleculeView);webglViewer.render()}else if(structureSdf)renderStructure()}
 });
 $('catalogSearch').addEventListener('input',()=>{catalogPage=1;renderCatalog()});
+for(const id of ['studyFilter','effectFilter'])$(id).addEventListener('change',()=>{catalogPage=1;renderCatalog()});
+$('exportRecords').addEventListener('click',async()=>{
+  const b=$('exportRecords');b.disabled=true;
+  try {
+    const {q,study,effect}=recordQuery();
+    const params=new URLSearchParams({format:'csv',q,study_type:study,effect_type:effect});
+    const response=await fetch('/api/catalog/records?'+params,{headers:{'X-Chem-PDF-Extractor-Token':window.LOCAL_TOKEN}});
+    if(!response.ok)throw Error('实验表导出失败，请刷新页面后重试');
+    const url=URL.createObjectURL(await response.blob()),link=document.createElement('a');
+    link.href=url;link.download='experiment-records.csv';document.body.append(link);link.click();link.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),30000);message('已导出符合当前筛选条件的实验记录。');
+  }catch(e){message(e.message,true)}finally{b.disabled=false}
+});
 $('prevPage').addEventListener('click',()=>{catalogPage--;renderCatalog()});
 $('nextPage').addEventListener('click',()=>{catalogPage++;renderCatalog()});
 $('pageSelect').addEventListener('change',()=>{catalogPage=Number($('pageSelect').value);renderCatalog()});

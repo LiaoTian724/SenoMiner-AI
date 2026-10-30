@@ -19,3 +19,19 @@
 @media(max-width:1100px){.side-panel{grid-row:1}.catalog-section{grid-row:2}}
 
 .chemistry-section{padding:0 0 22px;margin:0 0 22px;border-bottom:1px solid var(--line)}.chemistry-section>h3{font-size:16px;margin:0 0 14px}.chemistry-section .compound-overview{padding:0;margin:0;border:0}#inputPanel,#catalogHeading{scroll-margin-top:14px}
+
+/* Source-bound database records, with protocols available on demand. */
+.catalog-filters{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:0 0 14px;font-size:12px}.catalog-filters select{font:inherit;padding:6px;border:1px solid #bfcbd2;background:white;border-radius:3px;color:var(--ink)}.catalog-filters button{margin-left:auto;font-size:12px;padding:6px 10px}.record-heading{font-size:17px;margin:0 0 12px}.experiment-table{width:100%;border-collapse:collapse;font-size:14px;line-height:1.65;margin-bottom:18px}.experiment-table caption{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.experiment-table th,.experiment-table td{padding:9px 12px;text-align:left;vertical-align:top;border:1px solid var(--line);overflow-wrap:anywhere}.experiment-table thead th{background:#eef2f4}.experiment-table tbody th{width:170px;min-width:125px;background:#f8f9fa;font-weight:500}.unreported{color:#7a838a}.record-evidence h4,.literature-source h4{font-size:15px;margin:13px 0 6px}.record-evidence blockquote{margin:6px 0 12px;border-left:3px solid #809aa9;padding:9px 12px;background:#f5f7f8;font-size:14px;line-height:1.65}.record-conclusion{font-size:14px;line-height:1.7}.protocol-details{border-top:1px solid var(--line);padding:12px 0;margin:12px 0;font-size:13px}.protocol-details>summary{cursor:pointer;color:var(--link)}.protocol-details .experiment-steps{margin-top:12px}.literature-source{border-top:1px solid var(--line);padding-top:7px;margin:13px 0}.literature-source p{margin:6px 0;font-size:13px}.literature-source .citation{font-size:12px}.extra-experiment .experiment-record{padding:13px 0 5px}
+@media(max-width:650px){.experiment-table{font-size:13px}.experiment-table th,.experiment-table td{padding:8px}.experiment-table tbody th{width:120px;min-width:105px}.catalog-filters{gap:8px}.catalog-filters button{margin-left:0}}
+
+/* Local 3Dmol: solid atoms/bonds; thumbnails share GPU resources. */
+.molecule-view,.preview-frame{background:#fff;overflow:hidden}
+.molecule-render-buffer{position:fixed;left:-10000px;top:0;width:220px;height:160px;pointer-events:none}
+.molecule-gpu-host{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+.molecule-render-buffer{overflow:hidden}
+.preview-frame img{display:block;width:100%;height:100%;object-fit:contain;user-select:none}
+.preview-interactive>img{visibility:hidden}
+.molecule-view canvas,.preview-frame canvas{cursor:grab}
+.molecule-view canvas:active,.preview-frame canvas:active{cursor:grabbing}
+.viewer-actions button[aria-pressed="true"]{background:#e4edf2;border-color:#7e9eaf}
+#viewerStatus{min-height:16px}

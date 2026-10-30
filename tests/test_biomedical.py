@@ -352,6 +352,47 @@ class WorkflowTests(unittest.TestCase):
                     resumed = extract_article(paper, [], config, runtime, FakeSkills(), Path(tmp))
                 self.assertEqual(len(resumed), 3)
 
+    def test_read_timeout_splits_only_failed_chunk_and_resumes_successful_children(self):
+        from chem_pdf_extractor.llm import TransientCloudAPIError
+        import pandas as pd
+        from pydantic import Field, create_model
+        runtime = RuntimeDeps(pd=pd, PdfReader=None, ChatPromptTemplate=None,
+                              ChatOllama=None, Field=Field, create_model=create_model)
+        paper = {'source': 'slow.txt', 'text': 'a'*3800, 'scope': 'local_document'}
+        config = {'enrich_databases': False, 'chunk_size': 8000, 'workers': 1}
+        original = '# Document: slow.txt\n' + paper['text']
+        middle = len(original)//2
+        left, right = original[:middle+200], original[middle-200:]
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            with patch('chem_pdf_extractor.biomedical.extract_with_cloud_api', side_effect=[
+                    TransientCloudAPIError('read timed out', timed_out=True), [],
+                    TransientCloudAPIError('read timed out', timed_out=True)]) as request:
+                with self.assertRaises(TransientCloudAPIError):
+                    extract_article(paper, [], config, runtime, FakeSkills(), folder)
+                self.assertEqual([call.args[4] for call in request.call_args_list], [original, left, right])
+            # Resume keeps both the failed-parent split plan and the completed
+            # empty left half. It requests only the remaining right half.
+            with patch('chem_pdf_extractor.biomedical.extract_with_cloud_api', return_value=[]) as request:
+                extract_article(paper, [], config, runtime, FakeSkills(), folder)
+                self.assertEqual([call.args[4] for call in request.call_args_list], [right])
+            with patch('chem_pdf_extractor.biomedical.extract_with_cloud_api', side_effect=AssertionError('must use cache')):
+                extract_article(paper, [], config, runtime, FakeSkills(), folder)
+
+    def test_rate_limit_does_not_split_the_paper(self):
+        from chem_pdf_extractor.llm import TransientCloudAPIError
+        import pandas as pd
+        from pydantic import Field, create_model
+        runtime = RuntimeDeps(pd=pd, PdfReader=None, ChatPromptTemplate=None,
+                              ChatOllama=None, Field=Field, create_model=create_model)
+        with tempfile.TemporaryDirectory() as tmp, patch(
+                'chem_pdf_extractor.biomedical.extract_with_cloud_api',
+                side_effect=TransientCloudAPIError('rate limit', status_code=429)) as request:
+            with self.assertRaises(TransientCloudAPIError):
+                extract_article({'source':'limited.txt','text':'a'*3800,'scope':'local_document'}, [],
+                                {'enrich_databases':False,'chunk_size':8000,'workers':1}, runtime, FakeSkills(), Path(tmp))
+            request.assert_called_once()
+
     def test_network_failure_does_not_recursively_split_the_paper(self):
         from chem_pdf_extractor.llm import TransientCloudAPIError
         import pandas as pd

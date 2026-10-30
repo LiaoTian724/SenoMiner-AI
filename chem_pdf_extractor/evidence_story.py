@@ -76,6 +76,9 @@ def _group_story(group: dict, compound_name: str) -> dict:
         "duration": group.get("duration") or "",
         "control": group.get("control") or "",
         "induction": group.get("induction") or "",
+        "induction_agent":group.get("induction_agent") or "",
+        "induction_conditions":group.get("induction_conditions") or "",
+        "recovery":group.get("recovery") or "",
         "sample_size": lead.get("sample_size") or "",
         "assay": lead.get("assay") or "",
         "result": lead.get("result") or lead.get("quote") or "",
@@ -181,6 +184,13 @@ def attach_evidence_stories(paper: dict, compound_name: str, source_text: str) -
         claim.update({
             "quote": source_span(source_text, pct_quote)["text"],
             "location": "Results 2.2 · Figure 2C；Methods 4.2",
+            "model":"CCD18Co、HCT116",
+            "assay":"Annexin V、SA-β-gal、CCK8",
+            "induction_agent":"5-FU",
+            "induction_conditions":"1 µM，连续 5 天",
+            "recovery":"24 h（无药培养基）",
+            "display_evidence":{key:{"quote":source_span(source_text,pct_anchors[0])["text"]}
+                                for key in ("induction_agent","induction_conditions","recovery")},
             "reading_steps": [
                 "使用 CCD18Co 和 HCT116 细胞。",
                 "加入 1 μM 5-FU，连续处理 5 天，诱导细胞衰老。",

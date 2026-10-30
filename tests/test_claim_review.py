@@ -124,7 +124,7 @@ class ClaimReviewTests(unittest.TestCase):
                         'source_sha256':directory,'read_at':read_at,'records':[r]}))
                 os.utime(path,(mtime,mtime))
             self.assertEqual(build_catalog(root)['compounds'],[])
-            for folder in (root/'output').iterdir():
+            for folder in (p for p in (root/'output').iterdir() if p.is_dir()):
                 report=json.loads((folder/'report.json').read_text());r=report['records'][0];quote=r['observed_result']
                 source=quote+'\n# Methods\nThe assay was cell viability.'
                 (folder/'source.md').write_text(source)

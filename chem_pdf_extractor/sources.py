@@ -67,5 +67,5 @@ def load_paper(value: str, skills: Any, runtime: Any, pdf_mode: str = "pymupdf4l
     if not text.strip():
         raise ValueError("No accessible full text or abstract; supply the PDF")
     return {"source": f"PMID:{pmid}", "pmid": pmid, "doi": paper.get("doi") or "",
-            "title": paper["title"], "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+            "title": paper["title"], "pubdate":paper.get("pubdate") or "", "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
             "text": text, "scope": scope, "parser": "science_skills_pubmed"}

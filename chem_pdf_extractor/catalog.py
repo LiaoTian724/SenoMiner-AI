@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from .config import PROJECT_ROOT
+from .database import save_catalog
 from .science_skills import ScienceSkills
 from .evidence_story import attach_evidence_stories
+from .experimental_records import paper_records
 from .claim_review import load_review
 from .structures import molecular_structure
 from .evidence_cards import load_cards, card_groups
@@ -118,6 +120,9 @@ def _paper_meta(report: dict, rows: list[dict], folder: Path) -> dict:
             "pmcid": str(source.get("pmcid") or ""),
             "doi": str(source.get("doi") or next((r.get("doi") for r in rows if r.get("doi")), "")),
         }
+    pubdate = str(source.get("pubdate") or source.get("year") or "")
+    year = re.search(r"\b(?:19|20)\d{2}\b", pubdate)
+    meta["year"] = year.group() if year else ""
     meta.update({"id": str(report.get("source_sha256") or folder.name)[:20],
                  "source_name": source_name, "scope": str(source.get("scope") or ""),
                  "url": str(source.get("url") or (f'https://pubmed.ncbi.nlm.nih.gov/{meta["pmid"]}/' if meta["pmid"].isdigit() else ""))})
@@ -205,6 +210,7 @@ def build_catalog(root: Path = PROJECT_ROOT) -> dict:
             paper["experiment_groups"] = len(paper["groups"])
             paper["outcomes"] = sum(len(g["outcomes"]) for g in paper["groups"])
             attach_evidence_stories(paper, item["name"], source_text_by_paper.get(paper["id"], ""))
+            paper["experiment_records"] = paper_records(paper, item["name"], item["identity"])
         item["papers"].sort(key=lambda p: -p["read_timestamp"])
         item["latest_read_timestamp"] = item["papers"][0]["read_timestamp"]
     # Stable ties preserve each article's extraction order rather than alphabetising drugs.
@@ -214,11 +220,13 @@ def build_catalog(root: Path = PROJECT_ROOT) -> dict:
                          if p["review_status"] == "complete" and p["card_status"] == "complete"}
     local_pdfs = [{"name": p.name, "processed": p.name in processed_sources}
                   for p in sorted((root / "input_pdfs").glob("*.pdf")) if p.is_file()][:100]
-    return {"compounds": items, "papers": papers, "local_pdfs": local_pdfs,
+    data = {"compounds": items, "papers": papers, "local_pdfs": local_pdfs,
             "summary": {"compounds": len(items), "papers": len(papers),
                         "direct": sum(c["status"] == "paper_experiment" for c in items),
                         "experiment_groups": sum(p["experiment_groups"] for c in items for p in c["papers"]),
                         "outcomes": sum(p["outcomes"] for c in items for p in c["papers"])}}
+    save_catalog(root, data)
+    return data
 
 
 def local_pdf_output(name: str, root: Path = PROJECT_ROOT) -> Path:

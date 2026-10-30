@@ -81,8 +81,9 @@ class CloudStructuredOutputReport:
 class TransientCloudAPIError(RuntimeError):
     """Raised only after retry-exhausted transient cloud/API/network failures."""
 
-    def __init__(self, message: str = "", *, status_code: int | None = None) -> None:
+    def __init__(self, message: str = "", *, status_code: int | None = None, timed_out: bool = False) -> None:
         self.status_code = status_code
+        self.timed_out = timed_out
         super().__init__(message or "Cloud API/network temporarily unavailable after retries.")
 
 
@@ -368,14 +369,15 @@ def cloud_chat_completion(
                 raise RuntimeError("HTTPS 证书校验失败；请检查虚拟环境的 CA 证书路径或 SSL_CERT_FILE 配置。") from exc
             last_exc = exc
             if attempt >= attempts - 1:
-                raise TransientCloudAPIError(
-                    "云端连接超时或网络不可用，自动重试后仍失败；已完成的分段已缓存，可重试继续。"
-                ) from exc
+                timed_out = isinstance(reason, TimeoutError)
+                message = (f"云端请求等待超时（每次上限 {llm_timeout} 秒），重试后仍未取得响应；已缓存完成的分段。"
+                           if timed_out else "云端网络连接失败，自动重试后仍不可用；已完成的分段已缓存，可重试继续。")
+                raise TransientCloudAPIError(message, timed_out=timed_out) from exc
         except (json.JSONDecodeError, KeyError) as exc:
             raise RuntimeError(f"Cloud API returned malformed response: {redact_sensitive_text(short_error(exc))}") from exc
         delay = min(CLOUD_RETRY_MAX_DELAY_SECONDS, CLOUD_RETRY_BASE_DELAY_SECONDS * (2**attempt))
         if on_retry:
-            on_retry(f"云端暂未返回有效响应，{delay:g} 秒后重试（第 {attempt+2}/{attempts} 次请求）")
+            on_retry(f"{'云端请求等待超时' if isinstance(getattr(last_exc, 'reason', last_exc), TimeoutError) else '云端暂未返回有效响应'}，{delay:g} 秒后重试（第 {attempt+2}/{attempts} 次请求）")
         time.sleep(delay)
     raise TransientCloudAPIError("Cloud API/network temporarily unavailable after retries.") from last_exc
 

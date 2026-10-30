@@ -1,10 +1,10 @@
 // Frontend behavior without a browser: rendering, immediate feedback and API wiring.
 const vm=require('node:vm'),fs=require('node:fs'),assert=require('node:assert/strict');
 const nodes=new Map();
-function node(id){if(!nodes.has(id))nodes.set(id,{id,value:'',innerHTML:'',textContent:'',hidden:false,disabled:false,files:[],listeners:{},classList:{toggle(){}},addEventListener(name,fn){this.listeners[name]=fn},querySelectorAll(){return []},showModal(){this.open=true}});return nodes.get(id)}
+function node(id){if(!nodes.has(id))nodes.set(id,{id,dataset:{},value:'',innerHTML:'',textContent:'',hidden:false,disabled:false,files:[],listeners:{},classList:{toggle(){}},addEventListener(name,fn){this.listeners[name]=fn},querySelectorAll(){return []},querySelector(){return null},showModal(){this.open=true}});return nodes.get(id)}
 let requests=[],pendingStart;
 const initial={compounds:[],papers:[],local_pdfs:[{name:'waiting.pdf',processed:false},{name:'done.pdf',processed:true}],summary:{}};
-const ctx=vm.createContext({document:{getElementById:node},window:{LOCAL_TOKEN:'local'},Date,JSON,Math,Number,String,Map,Error,Promise,encodeURIComponent,setInterval(){},fetch:async(path,options={})=>{
+const ctx=vm.createContext({URLSearchParams,document:{getElementById:node},window:{LOCAL_TOKEN:'local'},Date,JSON,Math,Number,String,Map,Error,Promise,encodeURIComponent,setInterval(){},fetch:async(path,options={})=>{
  requests.push([path,options]);
  if(path.startsWith('/api/catalog/structure'))return new Promise(()=>{});
  if(path==='/api/catalog/process-pdf')return new Promise(resolve=>{pendingStart=()=>resolve({ok:true,json:async()=>({ok:true,running:true,task:{source:'waiting.pdf',kind:'pdf',status:'running',stage:'extracting',stage_label:'分段提取',completed:1,total:4,elapsed_seconds:2,message:'已完成 1/4 段',events:[]}})})});
@@ -29,12 +29,43 @@ vm.runInContext(fs.readFileSync('chem_pdf_extractor/static/catalog.js','utf8'),c
  vm.runInContext("state.running=false;state.task.status='failed';state.task.stage='failed';state.task.stage_label='提取失败';state.task.error='network';renderProgress()",ctx);
  assert.match(node('taskProgress').innerHTML,/重试并继续/);
  assert.doesNotMatch(node('taskProgress').innerHTML,/<progress/);
- vm.runInContext(`state.compounds=[{name:'17-DMAG',identity:{name:'17-DMAG',cid:'5288674',formula:'C32H48N4O8'},papers:[{title:'Source paper',source_name:'paper.pdf',groups:[{id:'g',study_type:'in_vitro',outcomes:[],steps:[]}],lead_claim:{group_id:'g',quote:'Source claim'}}]}];openDetail(0)`,ctx);
+ vm.runInContext(`state.compounds=[{name:'17-DMAG',identity:{name:'17-DMAG',cid:'5288674',formula:'C32H48N4O8'},papers:[{title:'Source paper',source_name:'paper.pdf',groups:[{id:'g',study_type:'in_vitro',outcomes:[],steps:[]}],experiment_records:[{group_id:'g',compound_name:'17-DMAG',study_type:'in_vitro',study_label:'细胞实验',effect_type:'senolytic',effect_label:'Senolytic',model:'WI-38',dose:'100 nM',duration:'24 h',assay:'Viability',result:'Reduced senescent cell viability',evidence_quote:'Source claim',primary:true}],lead_claim:{group_id:'g',quote:'Source claim'}}]}];openDetail(0)`,ctx);
  const detail=node('detailBody').innerHTML;
  assert.ok(detail.indexOf('class="chemistry-section"')<detail.indexOf('class="paper-story"'));
  assert.doesNotMatch(detail,/<details[^>]*id="chemistryDetails"/);
  assert.match(node('componentProps').innerHTML,/5288674/);
  assert.ok(requests.some(([url])=>url==='/api/catalog/structure?cid=5288674'));
  assert.equal(node('detailDialog').open,true);
- console.log('Frontend progress, retry, and molecular information first with immediate loading: OK');
+ assert.equal(vm.runInContext("recordMatches({dose:'20 µM'},'20 μM','','')",ctx),true);
+ assert.match(detail,/class="experiment-table"/);
+ assert.match(detail,/研究对象/);
+ assert.match(detail,/100 nM/);
+ assert.match(detail,/<details class="protocol-details"><summary>详细实验操作与原文参数/);
+ assert.doesNotMatch(detail,/<h3>2. 实验步骤/);
+ assert.equal(vm.runInContext("recordMatches(state.compounds[0].papers[0].experiment_records[0],'WI-38 100','in_vitro','senolytic')",ctx),true);
+ assert.equal(vm.runInContext("recordMatches(state.compounds[0].papers[0].experiment_records[0],'','clinical','')",ctx),false);
+ // Default to actual 3D, retain camera on style changes, and fall back on GPU failure.
+ vm.runInContext(`globalThis.gpuCalls=0;globalThis.canvasCalls=0;globalThis.stopCalls=0;globalThis.styles=[];
+ globalThis.viewerMock={setStyle:(selection,style)=>styles.push(style),render(){},setView(view){globalThis.resetView=view}};
+ webgl3D=()=>{gpuCalls++;webglViewer=viewerMock;return {initial:[1,2,3],stop:()=>{stopCalls++;webglViewer=null}}};
+ canvas3D=()=>{canvasCalls++;return ()=>{stopCalls++}};
+ structureSdf='source molecule coordinates';renderMode='auto';molecularStyle='ballstick';renderStructure();`,ctx);
+ assert.equal(vm.runInContext('gpuCalls',ctx),1);
+ assert.equal(vm.runInContext('canvasCalls',ctx),0);
+ assert.match(node('viewerStatus').textContent,/立体显示/);
+ const clickStyle={dataset:{style:'spacefill'}};
+ node('detailBody').listeners.click({target:{closest:selector=>selector==='[data-style]'?clickStyle:null}});
+ assert.equal(vm.runInContext('styles[0].sphere.colorscheme',ctx),'Jmol');
+ assert.equal(vm.runInContext('styles[0].stick',ctx),undefined);
+ assert.equal(vm.runInContext('gpuCalls',ctx),1,'Changing appearance must preserve the live viewer/camera');
+ node('detailBody').listeners.click({target:{closest:selector=>selector==='[data-reset]'?{}:null}});
+ assert.equal(vm.runInContext('resetView.join()',ctx),'1,2,3');
+ vm.runInContext("webgl3D=()=>{throw Error('WebGL unavailable')};renderStructure()",ctx);
+ assert.equal(vm.runInContext('canvasCalls',ctx),1);
+ assert.equal(vm.runInContext('stopCalls',ctx),1);
+ assert.match(node('viewerStatus').textContent,/兼容显示/);
+ assert.equal(vm.runInContext('structureSdf',ctx),'source molecule coordinates');
+ node('detailDialog').listeners.close();
+ assert.equal(vm.runInContext('stopCalls',ctx),2);
+ console.log('Frontend progress, record filtering, molecular layout, 3D style/camera and graphics fallback: OK');
 })().catch(e=>{process.stderr.write(e.stack+'\n');process.exitCode=1});

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from functools import lru_cache
 from typing import Any
 
 KEY_FIELDS = ("compound_name", "experiment_model", "treatment_dose",
@@ -18,20 +19,70 @@ def normalized(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
+@lru_cache(maxsize=8)
+def _reading_projection(source: str) -> tuple[str, tuple[int, ...]]:
+    """Remove only paired Markdown emphasis and repeated PDF page furniture.
+
+    Keep a map to the retained source. Never use fuzzy matches, change numbers,
+    join separate sentences, or remove arbitrary text between quote fragments.
+    """
+    hidden = set()
+    # Only a repeated journal/year prefix with valid page counters is furniture.
+    headers = {}
+    for m in re.finditer(r"^([^\n]{1,180}\b(?:19|20)\d{2}\b[^\n]{0,100}?)\s+(\d+)\s+of\s+(\d+)[ \t]*$", source, re.M):
+        page, total = int(m[2]), int(m[3])
+        if 1 <= page <= total and total > 1:
+            headers.setdefault((m[1], total), []).append(m)
+    for matches in headers.values():
+        if len({int(m[2]) for m in matches}) > 1:
+            for m in matches:
+                hidden.update(range(m.start(), m.end()))
+    # A delimiter inside an identifier (drug_A) or a lone '*' is not markup.
+    emphasis = r"(?<!\w)(\*{1,2}|_{1,2})(?=\S)([^\n]+?)(?<=\S)\1(?!\w)"
+    for m in re.finditer(emphasis, source):
+        hidden.update(range(m.start(), m.start(2)))
+        hidden.update(range(m.end(2), m.end()))
+    chars, offsets = [], []
+    for index, char in enumerate(source):
+        if index in hidden:
+            continue
+        if char.isspace():
+            if chars and chars[-1] != ' ':
+                chars.append(' ')
+                offsets.append(index)
+        else:
+            chars.append(char)
+            offsets.append(index)
+    if chars and chars[-1] == ' ':
+        chars.pop()
+        offsets.pop()
+    return ''.join(chars), tuple(offsets)
+
+
 def source_span(source: str, quote: str) -> dict[str, Any] | None:
-    """Exact, case-sensitive source span, permitting whitespace changes only."""
+    """Case-sensitive literal match, allowing whitespace and PDF markup only.
+
+    Returned text and offsets always address the original, unchanged source.
+    """
     quote = normalized(quote)
     if not quote:
         return None
     pattern = r"\s+".join(re.escape(part) for part in quote.split(" "))
     match = re.search(pattern, source)
-    if not match:
-        return None
+    if match:
+        start, end = match.span()
+    else:
+        reading, offsets = _reading_projection(source)
+        needle, _ = _reading_projection(quote)
+        index = reading.find(needle) if needle else -1
+        if index < 0:
+            return None
+        start, end = offsets[index], offsets[index + len(needle) - 1] + 1
     markers = list(re.finditer(r"(?:<!--\s*Page\s+(\d+)\s*-->|^#{1,6}\s*Page\s+(\d+)\s*$)",
-                               source[:match.start()], re.I | re.M))
+                               source[:start], re.I | re.M))
     page = next((int(v) for v in markers[-1].groups() if v), None) if markers else None
-    return {"start": match.start(), "end": match.end(), "page": page,
-            "text": source[match.start():match.end()]}
+    return {"start": start, "end": end, "page": page,
+            "text": source[start:end]}
 
 
 def _json_value(value: Any, expected: type, default: Any) -> Any:

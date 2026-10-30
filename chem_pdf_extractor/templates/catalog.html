@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>论文实验信息 · SenoMiner-AI</title>
+<title>抗衰老化合物实验数据库 · SenoMiner-AI</title>
 <link rel="stylesheet" href="/static/catalog.css">
 <script>window.LOCAL_TOKEN = __LOCAL_TOKEN__;</script>
 <script defer src="/static/3Dmol-min.js"></script>
@@ -12,14 +12,14 @@
 <body>
 <header class="site-header">
   <div class="container header-row">
-    <div><strong>SenoMiner-AI</strong><span>论文实验信息提取</span></div>
+    <div><strong>SenoMiner-AI</strong><span>抗衰老化合物实验数据库</span></div>
     <nav aria-label="页面导航"><a href="#inputPanel">上传论文</a><a href="#catalogHeading">化合物列表</a></nav>
   </div>
 </header>
 <main class="container">
   <section class="intro">
     <h1>论文中的抗衰老化合物</h1>
-    <p>上传论文，查找作者报告有效的化合物，查看原文依据、实验步骤与结果。</p>
+    <p>从原始论文提取化合物、实验条件和结果，并关联原文证据。</p>
     <div id="statusLine" class="muted" aria-live="polite">正在读取本地报告…</div>
   </section>
   <section class="search-panel" aria-labelledby="searchHeading">
@@ -31,7 +31,12 @@
   <p id="message" class="message" role="status" aria-live="polite"></p>
   <div class="main-grid">
     <section class="catalog-section" aria-labelledby="catalogHeading">
-      <div class="section-title"><div><h2 id="catalogHeading">化合物列表</h2><p id="catalogCount" class="muted"></p></div><input id="catalogSearch" type="search" aria-label="搜索已收录化合物" placeholder="筛选化合物或论文"></div>
+      <div class="section-title"><div><h2 id="catalogHeading">化合物列表</h2><p id="catalogCount" class="muted"></p></div><input id="catalogSearch" type="search" aria-label="搜索已收录化合物" placeholder="化合物、细胞系、方法或论文" maxlength="200"></div>
+      <div class="catalog-filters">
+        <label>实验类型 <select id="studyFilter"><option value="">全部</option><option value="in_vitro">细胞实验</option><option value="ex_vivo">离体组织实验</option><option value="in_vivo">动物实验</option><option value="clinical">人体给药研究</option></select></label>
+        <label>作用类型 <select id="effectFilter"><option value="">全部</option><option value="senolytic">Senolytic</option><option value="senomorphic">Senomorphic</option><option value="lifespan">寿命延长</option><option value="aging_function">衰老相关功能改善</option></select></label>
+        <button id="exportRecords">导出实验表</button>
+      </div>
       <div class="table-wrap"><table class="catalog-table"><thead><tr><th>化合物 / 联合用药</th><th>3D 分子结构</th><th>来源文献</th><th></th></tr></thead><tbody id="catalogRows"></tbody></table></div>
       <nav class="pagination" aria-label="目录分页"><span id="pageInfo"></span><label>每页 <select id="pageSize" aria-label="每页条数"><option value="5">5</option><option value="10">10</option><option value="20">20</option></select> 条</label><button id="prevPage">上一页</button><label>跳到第 <select id="pageSelect" aria-label="选择页码"></select> 页</label><button id="nextPage">下一页</button></nav>
       <p class="muted small">拖动分子可旋转。点击“查看详情”阅读论文中的实验与发现。</p>
@@ -51,7 +56,7 @@
   </div>
 </main>
 <dialog id="detailDialog" aria-labelledby="detailTitle">
-  <header class="dialog-header"><div><small>论文实验解读</small><h2 id="detailTitle"></h2></div><button id="closeDetail" aria-label="关闭详情">关闭</button></header>
+  <header class="dialog-header"><div><small>化合物实验记录</small><h2 id="detailTitle"></h2></div><button id="closeDetail" aria-label="关闭详情">关闭</button></header>
   <div id="detailBody" class="dialog-body"></div>
 </dialog>
 </body>

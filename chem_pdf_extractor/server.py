@@ -147,6 +147,7 @@ class ChemExtractorApp:
         self.ui_token = secrets.token_urlsafe(32)
         self.port = 0
         self.catalog_task = CatalogProgress()
+        self.instance_id = ""
 
     def catalog_status(self) -> dict[str, Any]:
         return self.catalog_task.snapshot()
@@ -202,6 +203,12 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/local-instance":
+            if not is_loopback_client(self.client_address) or not is_allowed_origin_header(self.headers.get("Origin"), self.app.port):
+                self.reject_forbidden()
+                return
+            self.send_json({"instance_id": self.app.instance_id})
+            return
         if parsed.path == "/catalog":
             data = render_catalog_html(self.app.ui_token).encode("utf-8")
             self.send_response(200)
@@ -235,6 +242,28 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/catalog":
             self.send_json({**catalog.build_catalog(), **self.app.catalog_status()})
+            return
+
+        if parsed.path == "/api/catalog/records":
+            from .experimental_records import all_records, records_csv, filter_records
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                records = filter_records(all_records(catalog.build_catalog()), query.get("q", [""])[0],
+                                         query.get("study_type", [""])[0], query.get("effect_type", [""])[0])
+            except ValueError as exc:
+                self.send_json({"ok":False, "error":str(exc)}, status=400)
+                return
+            if query.get("format", [""])[0] == "csv":
+                data = records_csv(records)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", 'attachment; filename="experiment-records.csv"')
+                self.send_header("Content-Length", str(len(data)))
+                self.send_common_security_headers()
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self.send_json({"ok":True, "records":records, "count":len(records)})
             return
 
         if parsed.path == "/api/catalog/search":
@@ -526,12 +555,37 @@ def _catalog_check_stages(output: Path) -> None:
             raise RuntimeError(f"原始提取已保存，但{label}未完成：{saved.get('error') or '请重试继续'}")
 
 
+def _catalog_completion_message(output: Path) -> str:
+    """Distinguish no eligible findings from evidence that still needs review."""
+    from .claim_review import load_review
+    from .evidence_cards import load_cards
+    report = json.loads((output / "report.json").read_text())
+    rows = report.get("records", [])
+    source = (output / "source.md").read_text()
+    review = load_review(output, rows, source)
+    cards = load_cards(output, rows, source, review)
+    if cards is None:
+        raise RuntimeError("实验关联尚未完成，请重试继续。")
+    names = {c["name"] for c in cards}
+    if names:
+        return f"提取完成：收录 {len(names)} 个化合物、{len(cards)} 组实验。可在列表中查看。"
+    decisions = review.get("decisions", [])
+    accepted = sum(d.get("verdict") == "accepted" for d in decisions)
+    uncertain = sum(d.get("verdict") == "uncertain" for d in decisions)
+    if accepted:
+        return f"提取结束：识别出 {accepted} 个有效候选，但未关联到可核对的完整实验，列表收录 0 个化合物；需复核。"
+    if uncertain:
+        return f"提取结束：列表收录 0 个化合物；{uncertain} 个候选的原文证据未通过核对，需复核。"
+    return "提取完成：未找到符合收录条件的本篇实验结果，列表收录 0 个化合物。"
+
+
 def _run_catalog_import(app: ChemExtractorApp, identifier: str) -> None:
     from .biomedical import extract_article
     from .sources import load_paper, resolve_pubmed_identifier
     from .science_skills import ScienceSkills
     needs_pdf = False
     error = ""
+    completion_message = ""
     try:
         config = _catalog_config(app)
         app.catalog_task.update("loading", message=f"正在定位 {identifier} 并获取公开全文")
@@ -539,6 +593,7 @@ def _run_catalog_import(app: ChemExtractorApp, identifier: str) -> None:
         pmid = resolve_pubmed_identifier(identifier, skills)
         output = PROJECT_ROOT / "output" / "papers" / f"PMID-{pmid}"
         if _catalog_report_complete(output):
+            completion_message = _catalog_completion_message(output)
             app.catalog_log(f"PMID {pmid} 已完成，无需重复提取")
             return
         paper = load_paper(f"PMID:{pmid}", skills, app.runtime)
@@ -548,12 +603,13 @@ def _run_catalog_import(app: ChemExtractorApp, identifier: str) -> None:
         app.catalog_log(f"已获取全文：{paper.get('title') or pmid}")
         rows = extract_article(paper, [], config, app.runtime, skills, output)
         _catalog_check_stages(output)
+        completion_message = _catalog_completion_message(output)
         app.catalog_log(f"已完成：{len(rows)} 条原始候选；通过核对的结果已进入列表")
     except Exception as exc:
         log_exception(exc, context="catalog_import")
         error = redact_sensitive_text(str(exc))
     finally:
-        app.catalog_task.finish(error, needs_pdf=needs_pdf)
+        app.catalog_task.finish(error, needs_pdf=needs_pdf, message=completion_message)
 
 
 def _run_catalog_pdf(app: ChemExtractorApp, pdf: Path, output: Path) -> None:
@@ -561,9 +617,11 @@ def _run_catalog_pdf(app: ChemExtractorApp, pdf: Path, output: Path) -> None:
     from .sources import load_paper
     from .science_skills import ScienceSkills
     error = ""
+    completion_message = ""
     try:
         config = _catalog_config(app)
         if _catalog_report_complete(output):
+            completion_message = _catalog_completion_message(output)
             app.catalog_log(f"{pdf.name} 已完成，无需重复提取")
             return
         skills = ScienceSkills(output / "database_cache")
@@ -572,19 +630,21 @@ def _run_catalog_pdf(app: ChemExtractorApp, pdf: Path, output: Path) -> None:
         app.catalog_log(f"PDF 已解析，共 {len(paper['text'])} 字符")
         rows = extract_article(paper, [], config, app.runtime, skills, output)
         _catalog_check_stages(output)
+        completion_message = _catalog_completion_message(output)
         app.catalog_log(f"已完成：{len(rows)} 条原始候选；通过核对的结果已进入列表")
     except Exception as exc:
         log_exception(exc, context="catalog_pdf")
         error = redact_sensitive_text(str(exc))
     finally:
-        app.catalog_task.finish(error)
+        app.catalog_task.finish(error, message=completion_message)
 
 
-def start_web_app(
+def _serve_web_app(
     port: int,
     auto_install: bool,
     open_browser: bool = False,
     initial_pdf_mode: str = DEFAULT_PDF_MODE,
+    instance=None,
 ) -> int:
     from .config import ensure_dependencies, import_runtime_dependencies
     log_startup_event(mode="web", extra={"requested_port": port, "open_browser": open_browser})
@@ -597,9 +657,12 @@ def start_web_app(
         app = ChemExtractorApp(runtime, default_pdf_mode=initial_pdf_mode)
         actual_port = find_free_port(port)
         app.port = actual_port
+        app.instance_id = instance.instance_id if instance else ""
         server = ThreadingHTTPServer(("127.0.0.1", actual_port), RequestHandler)
         app.server = server
         RequestHandler.app = app
+        if instance:
+            instance.publish(actual_port)
         url = f"http://127.0.0.1:{actual_port}/catalog"
         append_diagnostic_log(
             "startup.log",
@@ -623,3 +686,24 @@ def start_web_app(
             append_diagnostic_log("startup.log", "web server closed")
             print("Chem-PDF-Extractor 本地服务已关闭。")
     return 0
+
+
+def start_web_app(
+    port: int,
+    auto_install: bool,
+    open_browser: bool = False,
+    initial_pdf_mode: str = DEFAULT_PDF_MODE,
+) -> int:
+    from .single_instance import WebInstance
+    instance = WebInstance(PROJECT_ROOT)
+    try:
+        if not instance.acquire():
+            url = instance.existing_url()
+            print("项目已在运行，使用现有页面：")
+            print(url)
+            if open_browser:
+                webbrowser.open(url)
+            return 0
+        return _serve_web_app(port, auto_install, open_browser, initial_pdf_mode, instance=instance)
+    finally:
+        instance.close()

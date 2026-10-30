@@ -127,3 +127,17 @@ class RelocatedTlsTest(unittest.TestCase):
                 cloud_chat_completion('https://api.real-provider.test/v1','fake','model',[],10,retry_count=3)
         self.assertNotIsInstance(exc.exception,TransientCloudAPIError)
         request.assert_called_once();sleep.assert_not_called()
+
+
+class TimeoutClassificationTest(unittest.TestCase):
+    def test_read_timeout_is_identified_separately_from_network_failure(self):
+        cases = [(TimeoutError('The read operation timed out'), True),
+                 (urllib.error.URLError('DNS failure'), False)]
+        for error, expected in cases:
+            with self.subTest(expected=expected), patch('urllib.request.urlopen', side_effect=error), patch('time.sleep'):
+                with self.assertRaises(TransientCloudAPIError) as raised:
+                    cloud_chat_completion('https://api.real-provider.test/v1','fake','model',[],240,retry_count=1)
+                self.assertEqual(raised.exception.timed_out, expected)
+                if expected:
+                    self.assertIn('240 秒', str(raised.exception))
+                self.assertNotIn('DNS failure', str(raised.exception))

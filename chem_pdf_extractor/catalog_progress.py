@@ -49,7 +49,7 @@ class CatalogProgress:
             self.task['events'] = (self.task['events'] + [{'time': now, 'message': text}])[-30:]
             self.task['updated_at'] = now
 
-    def finish(self, error: str = '', *, needs_pdf: bool = False):
+    def finish(self, error: str = '', *, needs_pdf: bool = False, message: str = ''):
         with self.lock:
             if not self.task:
                 return
@@ -57,7 +57,7 @@ class CatalogProgress:
             status = 'needs_pdf' if needs_pdf else ('failed' if error else 'complete')
             self.task.update(status=status, stage=status, error=redact_sensitive_text(str(error))[:800],
                              finished_at=now, updated_at=now)
-            self.task['message'] = self.task['error'] or '提取完成，化合物列表已更新'
+            self.task['message'] = self.task['error'] or redact_sensitive_text(message)[:800] or '提取完成，化合物列表已更新'
 
     def snapshot(self) -> dict:
         with self.lock:

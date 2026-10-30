@@ -22,6 +22,7 @@ from .sources import load_paper
 from .validation import validate_experiment
 from .claim_review import review_rows, approved_records, populate_identities
 from .evidence_cards import extract_cards
+from .database import sync_project_output
 
 
 def text_chunks(text: str, size: int = 18000, overlap: int = 1200):
@@ -60,29 +61,64 @@ def extract_article(paper: dict, supplements: list[dict], config: dict,
     progress("extracting", message="正在分段读取全文", completed=0, total=len(chunks))
     checkpoint_dir = output_dir / "extraction_cache"
     checkpoint_dir.mkdir(exist_ok=True)
-    def call_cloud_chunk(chunk):
-        try:
-            return extract_with_cloud_api(Path(paper["source"]),
-                {**config, "response_dir": str(output_dir / "model_responses"), "cloud_retry_count": 2}, fields, mapping, chunk)
-        except CloudStructuredOutputError:
-            if len(chunk) <= 2500:
-                raise
-            if log:
-                log(f"模型返回格式不完整，拆分 {len(chunk)} 字符片段后重试")
-            middle = len(chunk) // 2
-            return call_cloud_chunk(chunk[:middle+200]) + call_cloud_chunk(chunk[middle-200:])
-    def extract_one_chunk(pair):
-        nonlocal completed, cached
-        chunk_index, chunk = pair
-        if log:
-            log(f"正在请求分段 {chunk_index}/{len(chunks)}（{len(chunk)} 字符）")
-        checkpoint_key = hashlib.sha256(json.dumps({
+    def checkpoint_for(chunk):
+        key = hashlib.sha256(json.dumps({
             "text": chunk, "fields": fields, "rules": BIOLOGY_RULES,
             "provider": config.get("llm_provider", "cloud"),
             "model": config.get("cloud_model") or config.get("model"),
             "base_url": config.get("cloud_base_url"),
         }, sort_keys=True).encode()).hexdigest()
-        checkpoint = checkpoint_dir / f"{checkpoint_key}.json"
+        return checkpoint_dir / f"{key}.json"
+
+    def save_checkpoint(path, records):
+        fd, temporary = tempfile.mkstemp(dir=checkpoint_dir, suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(records, handle, ensure_ascii=False)
+        Path(temporary).replace(path)
+
+    def call_cloud_chunk(chunk):
+        checkpoint = checkpoint_for(chunk)
+        try:
+            saved = json.loads(checkpoint.read_text(encoding="utf-8"))
+            if isinstance(saved, list) and all(isinstance(row, dict) for row in saved):
+                return saved
+        except (OSError, ValueError):
+            pass
+        split_marker = checkpoint.with_suffix(".split.json")
+        try:
+            split = json.loads(split_marker.read_text()).get("reason") in {"request_timeout", "structured_output"}
+        except (OSError, ValueError, AttributeError):
+            split = False
+        if split and len(chunk) > 2500:
+            if log:
+                log(f"复用分段拆分计划（{len(chunk)} 字符），已完成子段不重复请求")
+        else:
+            try:
+                records = extract_with_cloud_api(Path(paper["source"]),
+                    {**config, "response_dir": str(output_dir / "model_responses"), "cloud_retry_count": 2}, fields, mapping, chunk)
+                save_checkpoint(checkpoint, records)
+                return records
+            except (CloudStructuredOutputError, TransientCloudAPIError) as exc:
+                # DNS/connection errors, rate limits and server errors are not
+                # evidence that smaller input helps. Do not multiply requests.
+                timed_out = isinstance(exc, TransientCloudAPIError) and exc.timed_out
+                if (isinstance(exc, TransientCloudAPIError) and not timed_out) or len(chunk) <= 2500:
+                    raise
+                reason = "request_timeout" if timed_out else "structured_output"
+                save_checkpoint(split_marker, {"reason": reason})
+                if log:
+                    label = "云端请求超时" if timed_out else "模型返回格式不完整"
+                    log(f"{label}，将 {len(chunk)} 字符分段拆小后继续；保留已完成分段")
+        middle = len(chunk) // 2
+        records = call_cloud_chunk(chunk[:middle+200]) + call_cloud_chunk(chunk[middle-200:])
+        save_checkpoint(checkpoint, records)
+        return records
+    def extract_one_chunk(pair):
+        nonlocal completed, cached
+        chunk_index, chunk = pair
+        if log:
+            log(f"正在请求分段 {chunk_index}/{len(chunks)}（{len(chunk)} 字符）")
+        checkpoint = checkpoint_for(chunk)
         records = None
         if checkpoint.exists():
             try:
@@ -156,6 +192,7 @@ def extract_article(paper: dict, supplements: list[dict], config: dict,
         "interpretation": "Reported effects in the source model; text matches do not establish clinical efficacy or correct experiment linkage.",
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     export_excel(rows, output_dir / "experiments.xlsx", runtime)
+    sync_project_output(output_dir)
     return rows
 
 

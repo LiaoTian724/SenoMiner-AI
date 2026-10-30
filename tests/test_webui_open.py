@@ -1,6 +1,8 @@
 import io
 import sys
 import unittest
+import tempfile
+from pathlib import Path
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
@@ -24,6 +26,8 @@ class FakeServer:
 class WebUiOpenTest(unittest.TestCase):
     def run_start_web_app(self, *, open_browser):
         with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(server_module, "PROJECT_ROOT", Path(tmp)),
             patch("chem_pdf_extractor.config.ensure_dependencies"),
             patch("chem_pdf_extractor.config.import_runtime_dependencies", return_value=object()),
             patch.object(server_module, "find_free_port", return_value=8766),

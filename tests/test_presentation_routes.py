@@ -1,4 +1,7 @@
 import json
+import csv
+import io
+from unittest.mock import patch
 import threading
 import unittest
 import urllib.error
@@ -45,3 +48,26 @@ class PresentationRoutesTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as exc:
             urllib.request.urlopen(self.base+'/api/showcase')
         self.assertEqual(exc.exception.code,403)
+
+
+    def test_structured_records_api_filters_and_export_keeps_the_same_source(self):
+        records=[{'id':'r1','compound_name':'Fisetin','study_type':'in_vitro','effect_type':'senolytic',
+                  'model':'HCT116','dose':'20 µM','pubchem_cids':['5281614'],'source':{'title':'Paper','pmid':'123'}},
+                 {'id':'r2','compound_name':'Fisetin','study_type':'in_vivo','effect_type':'senolytic',
+                  'model':'Mouse','dose':'500 ppm','pubchem_cids':['5281614'],'source':{'title':'Paper','pmid':'123'}}]
+        dataset={'compounds':[{'papers':[{'experiment_records':records}]}]}
+        def request(suffix):
+            return urllib.request.Request(self.base+'/api/catalog/records'+suffix,headers={'X-Chem-PDF-Extractor-Token':self.app.ui_token})
+        with patch.object(server_module.catalog,'build_catalog',return_value=dataset):
+            with urllib.request.urlopen(request('?q=HCT116&study_type=in_vitro')) as response:
+                data=json.load(response)
+            self.assertEqual(data['count'],1)
+            self.assertEqual(data['records'][0]['id'],'r1')
+            with urllib.request.urlopen(request('?format=csv&study_type=in_vitro')) as response:
+                self.assertIn('attachment',response.headers['Content-Disposition'])
+                rows=list(csv.DictReader(io.StringIO(response.read().decode('utf-8-sig'))))
+            self.assertEqual(len(rows),1)
+            self.assertEqual(rows[0]['来源文献'],'Paper')
+            self.assertEqual(rows[0]['PMID'],'123')
+            with self.assertRaises(urllib.error.HTTPError) as exc:urllib.request.urlopen(self.base+'/api/catalog/records')
+            self.assertEqual(exc.exception.code,403)
